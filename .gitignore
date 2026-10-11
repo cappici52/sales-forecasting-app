@@ -1,0 +1,15 @@
+node_modules/
+.next/
+*.tsbuildinfo
+.env*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+data/uploads/
+*.sqlite3
+*.db
+backend/artifacts/
+coverage/
+artifacts/
+work/

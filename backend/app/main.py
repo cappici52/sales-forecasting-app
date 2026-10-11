@@ -1,0 +1,158 @@
+import io
+import json
+from contextlib import asynccontextmanager
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Response, Request
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import delete, func
+from sqlalchemy.orm import Session
+from .auth import COOKIE_NAME, SignIn, SignUp, check_origin, current_user, hash_password, normalize_email, set_session, token_hash, verify_password, writable_user
+from .config import settings
+from .database import Base, engine, get_db
+from .models import AuthSession, ModelRun, Organization, SalesRecord, User
+from .services import read_and_validate
+from .forecasting import artifact_path, train as train_model, predict
+
+def run_metrics(run: ModelRun | None) -> dict:
+    if not run or not run.metrics_json:
+        return {}
+    try:
+        value = json.loads(run.metrics_json)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+def active_artifact_id(run: ModelRun | None) -> str | None:
+    """Trust only a completed run in the current database that names an existing artifact."""
+    if not run or run.status != "completed":
+        return None
+    artifact_id = run_metrics(run).get("_artifact_id")
+    if not isinstance(artifact_id, str):
+        return None
+    try:
+        return artifact_id if artifact_path(artifact_id).is_file() else None
+    except ValueError:
+        return None
+
+def public_metrics(run: ModelRun | None) -> dict:
+    return {key: value for key, value in run_metrics(run).items() if key != "_artifact_id"}
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    yield
+
+app = FastAPI(title="ProjectA_1 API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins.split(","), allow_credentials=True, allow_methods=["GET", "POST"], allow_headers=["*"])
+
+@app.get("/health")
+def health(): return {"status": "ok"}
+
+@app.post("/api/v1/auth/register")
+def register(payload: SignUp, response: Response, request: Request, db: Session = Depends(get_db)):
+    check_origin(request)
+    email = normalize_email(payload.email)
+    if db.query(User).filter_by(email=email).first(): raise HTTPException(409, "อีเมลนี้ถูกใช้แล้ว")
+    org = Organization(name=payload.organization_name.strip())
+    db.add(org)
+    try: db.flush()
+    except Exception:
+        db.rollback(); raise HTTPException(409, "ชื่อองค์กรนี้ถูกใช้แล้ว")
+    user = User(organization_id=org.id, email=email, display_name=payload.display_name.strip(), password_hash=hash_password(payload.password), role="owner")
+    db.add(user); db.flush(); set_session(response, user, db)
+    return {"id": user.id, "name": user.display_name, "email": user.email, "role": user.role, "organization": org.name}
+
+@app.post("/api/v1/auth/login")
+def login(payload: SignIn, response: Response, request: Request, db: Session = Depends(get_db)):
+    check_origin(request)
+    user = db.query(User).filter_by(email=normalize_email(payload.email)).first()
+    if not user or not verify_password(payload.password, user.password_hash): raise HTTPException(401, "อีเมลหรือรหัสผ่านไม่ถูกต้อง")
+    set_session(response, user, db)
+    org = db.get(Organization, user.organization_id)
+    return {"id": user.id, "name": user.display_name, "email": user.email, "role": user.role, "organization": org.name}
+
+@app.get("/api/v1/auth/me")
+def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    org = db.get(Organization, user.organization_id)
+    return {"id": user.id, "name": user.display_name, "email": user.email, "role": user.role, "organization": org.name}
+
+@app.post("/api/v1/auth/logout")
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    check_origin(request)
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        db.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash(token))); db.commit()
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True}
+
+@app.get("/api/v1/summary")
+def summary(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    rows = db.query(SalesRecord).filter_by(organization_id=user.organization_id).all()
+    latest = db.query(ModelRun).filter_by(organization_id=user.organization_id).order_by(ModelRun.created_at.desc(), ModelRun.id.desc()).first()
+    model_status = "missing" if latest and latest.status == "completed" and not active_artifact_id(latest) else (latest.status if latest else None)
+    metrics = {"error": "ไฟล์โมเดลไม่พร้อม กรุณาเทรนใหม่"} if model_status == "missing" else public_metrics(latest)
+    return {"record_count": len(rows), "store_count": len({r.store_id for r in rows}), "sku_count": len({r.sku_id for r in rows}), "latest_date": max((r.date.isoformat() for r in rows), default=None), "total_revenue": round(sum(r.quantity_sold * (r.unit_price or 1) for r in rows), 2), "model": {"status": model_status, "created_at": latest.created_at.isoformat(), "metrics": metrics } if latest else None, "stores": sorted({r.store_id for r in rows}), "skus": sorted({r.sku_id for r in rows}), "categories": sorted({r.category for r in rows if r.category}), "channels": sorted({r.channel for r in rows})}
+
+@app.get("/api/v1/forecast")
+def forecast(days: int = 28, store_id: str | None = None, sku_id: str | None = None, category: str | None = None, channel: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if days not in (7, 14, 28): raise HTTPException(422, "เลือกระยะเวลา 7, 14 หรือ 28 วัน")
+    query = db.query(SalesRecord).filter_by(organization_id=user.organization_id)
+    if store_id: query = query.filter_by(store_id=store_id)
+    if sku_id: query = query.filter_by(sku_id=sku_id)
+    if category: query = query.filter_by(category=category)
+    if channel: query = query.filter_by(channel=channel)
+    rows = query.all()
+    history = {}
+    for r in rows:
+        day = r.date.isoformat(); history[day] = history.get(day, 0) + r.quantity_sold * (r.unit_price or 1)
+    latest = db.query(ModelRun).filter_by(organization_id=user.organization_id).order_by(ModelRun.created_at.desc(), ModelRun.id.desc()).first()
+    artifact_id = active_artifact_id(latest)
+    items = predict(rows, artifact_id, days) if rows and artifact_id else []
+    return {"source": "trained" if items else "empty", "items": items, "history": [{"date": day, "actual": round(value, 2)} for day, value in sorted(history.items())[-28:]]}
+
+@app.post("/api/v1/uploads/validate")
+async def validate_upload(file: UploadFile = File(...), user: User = Depends(current_user)):
+    frame = await read_and_validate(file)
+    return {"valid": True, "rows": len(frame), "columns": list(frame.columns), "date_range": {"from": str(frame.date.min().date()), "to": str(frame.date.max().date())}, "message": "ไฟล์ผ่านการตรวจสอบและไม่พบคอลัมน์ PII"}
+
+@app.post("/api/v1/uploads/import")
+async def import_upload(request: Request, file: UploadFile = File(...), user: User = Depends(writable_user), db: Session = Depends(get_db)):
+    check_origin(request)
+    frame = await read_and_validate(file)
+    db.execute(delete(SalesRecord).where(SalesRecord.organization_id == user.organization_id))
+    records = []
+    for row in frame.to_dict("records"):
+        records.append(SalesRecord(organization_id=user.organization_id, date=row["date"].date(), store_id=str(row["store_id"]), store_name=row.get("store_name"), sku_id=str(row["sku_id"]), sku_name=row.get("sku_name"), category=row.get("category"), channel=str(row.get("channel") or "unknown"), quantity_sold=float(row["quantity_sold"]), unit_price=float(row["unit_price"]) if row.get("unit_price") is not None else None, discount=float(row["discount"]) if row.get("discount") is not None else None, promotion_flag=bool(row.get("promotion_flag") or False), holiday_flag=bool(row.get("holiday_flag") or False)))
+    db.add_all(records); db.commit()
+    previous_runs = db.query(ModelRun).filter_by(organization_id=user.organization_id).all()
+    old_artifacts = [artifact_path(artifact_id) for run in previous_runs if (artifact_id := active_artifact_id(run))]
+    db.execute(delete(ModelRun).where(ModelRun.organization_id == user.organization_id)); db.commit()
+    for path in old_artifacts:
+        path.unlink(missing_ok=True)
+    return {"imported": len(records), "message": "นำเข้าข้อมูลสำเร็จ"}
+
+@app.post("/api/v1/models/train")
+def train(request: Request, user: User = Depends(writable_user), db: Session = Depends(get_db)):
+    check_origin(request)
+    run = ModelRun(organization_id=user.organization_id, model_name="XGBoost", status="running")
+    db.add(run); db.commit(); db.refresh(run)
+    records = db.query(SalesRecord).filter_by(organization_id=user.organization_id).all()
+    if not records:
+        run.status = "failed"; run.metrics_json = '{"error":"ยังไม่มีข้อมูลที่นำเข้า"}'; db.commit()
+        return {"run_id": run.id, "status": run.status, "message": "กรุณานำเข้าข้อมูลก่อนเทรนโมเดล"}
+    try:
+        metrics = train_model(records)
+        run.status = "completed"; run.metrics_json = json.dumps(metrics)
+    except ValueError as exc:
+        run.status = "failed"; run.metrics_json = json.dumps({"error": str(exc)})
+    db.commit()
+    return {"run_id": run.id, "status": run.status, "metrics": public_metrics(run)}
+
+@app.get("/api/v1/export")
+def export_sales(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    import csv
+    output = io.StringIO(); writer = csv.writer(output)
+    writer.writerow(["date", "store_id", "sku_id", "category", "channel", "quantity_sold", "unit_price"])
+    for r in db.query(SalesRecord).filter_by(organization_id=user.organization_id).order_by(SalesRecord.date).all():
+        writer.writerow([r.date.isoformat(), r.store_id, r.sku_id, r.category or "", r.channel, r.quantity_sold, r.unit_price or ""])
+    return StreamingResponse(iter(["\ufeff" + output.getvalue()]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=projecta-sales.csv"})

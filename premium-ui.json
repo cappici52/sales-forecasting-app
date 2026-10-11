@@ -1,0 +1,6 @@
+{
+  "sourceRoots": ["app"],
+  "ownership": {
+    "Select/Listbox": "native"
+  }
+}
