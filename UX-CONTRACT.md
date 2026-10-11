@@ -41,3 +41,5 @@ All data APIs require a session. Import and training require owner or manager on
 ## Navigation and display
 
 The selected section is visible in the sidebar on desktop and in the fixed bottom bar on mobile. Language and theme switches preserve preference in local storage when available. Status messages use `role=status` or `role=alert`. The forecast table is the text alternative to the chart.
+
+If the latest model run is recorded but its artifact is unavailable, display a distinct “model file unavailable” state and direct the user to retrain. Historical sales may still be charted, but must be labeled as actual data only; no forecast total, model badge, or forecast table is shown until forecast items exist.
