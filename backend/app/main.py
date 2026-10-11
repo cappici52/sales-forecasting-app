@@ -10,7 +10,7 @@ from .auth import COOKIE_NAME, SignIn, SignUp, check_origin, current_user, hash_
 from .config import settings
 from .database import Base, engine, get_db
 from .models import AuthSession, ModelRun, Organization, SalesRecord, User
-from .services import read_and_validate
+from .services import missing_calendar_days, read_and_validate
 from .forecasting import artifact_path, train as train_model, predict
 
 def run_metrics(run: ModelRun | None) -> dict:
@@ -26,7 +26,10 @@ def active_artifact_id(run: ModelRun | None) -> str | None:
     """Trust only a completed run in the current database that names an existing artifact."""
     if not run or run.status != "completed":
         return None
-    artifact_id = run_metrics(run).get("_artifact_id")
+    metrics = run_metrics(run)
+    if not metrics.get("backtests"):
+        return None  # Older artifacts used row-based lags and are not comparable.
+    artifact_id = metrics.get("_artifact_id")
     if not isinstance(artifact_id, str):
         return None
     try:
@@ -89,13 +92,28 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
 def summary(user: User = Depends(current_user), db: Session = Depends(get_db)):
     rows = db.query(SalesRecord).filter_by(organization_id=user.organization_id).all()
     latest = db.query(ModelRun).filter_by(organization_id=user.organization_id).order_by(ModelRun.created_at.desc(), ModelRun.id.desc()).first()
-    model_status = "missing" if latest and latest.status == "completed" and not active_artifact_id(latest) else (latest.status if latest else None)
-    metrics = {"error": "ไฟล์โมเดลไม่พร้อม กรุณาเทรนใหม่"} if model_status == "missing" else public_metrics(latest)
-    return {"record_count": len(rows), "store_count": len({r.store_id for r in rows}), "sku_count": len({r.sku_id for r in rows}), "latest_date": max((r.date.isoformat() for r in rows), default=None), "total_revenue": round(sum(r.quantity_sold * (r.unit_price or 1) for r in rows), 2), "model": {"status": model_status, "created_at": latest.created_at.isoformat(), "metrics": metrics } if latest else None, "stores": sorted({r.store_id for r in rows}), "skus": sorted({r.sku_id for r in rows}), "categories": sorted({r.category for r in rows if r.category}), "channels": sorted({r.channel for r in rows})}
+    price_missing_count = sum(r.unit_price is None for r in rows)
+    model_status = latest.status if latest else None
+    if model_status == "completed":
+        if price_missing_count:
+            model_status = "invalid_data"
+        elif not run_metrics(latest).get("backtests"):
+            model_status = "needs_retrain"
+        elif not active_artifact_id(latest):
+            model_status = "missing"
+    errors = {
+        "invalid_data": "ข้อมูลบางแถวไม่มี unit_price กรุณานำเข้าใหม่",
+        "needs_retrain": "โมเดลเดิมใช้วิธีประเมินเก่า กรุณาเทรนใหม่",
+        "missing": "ไฟล์โมเดลไม่พร้อม กรุณาเทรนใหม่",
+    }
+    metrics = {"error": errors[model_status]} if model_status in errors else public_metrics(latest)
+    return {"record_count": len(rows), "store_count": len({r.store_id for r in rows}), "sku_count": len({r.sku_id for r in rows}), "latest_date": max((r.date.isoformat() for r in rows), default=None), "total_revenue": round(sum(r.quantity_sold * r.unit_price for r in rows), 2) if not price_missing_count else None, "price_missing_count": price_missing_count, "model": {"status": model_status, "created_at": latest.created_at.isoformat(), "metrics": metrics } if latest else None, "stores": sorted({r.store_id for r in rows}), "skus": sorted({r.sku_id for r in rows}), "categories": sorted({r.category for r in rows if r.category}), "channels": sorted({r.channel for r in rows})}
 
 @app.get("/api/v1/forecast")
 def forecast(days: int = 28, store_id: str | None = None, sku_id: str | None = None, category: str | None = None, channel: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
     if days not in (7, 14, 28): raise HTTPException(422, "เลือกระยะเวลา 7, 14 หรือ 28 วัน")
+    if db.query(SalesRecord).filter_by(organization_id=user.organization_id, unit_price=None).first():
+        return {"source": "needs_price", "items": [], "history": [], "coverage": {"series_used": 0, "series_total": 0}}
     query = db.query(SalesRecord).filter_by(organization_id=user.organization_id)
     if store_id: query = query.filter_by(store_id=store_id)
     if sku_id: query = query.filter_by(sku_id=sku_id)
@@ -104,16 +122,16 @@ def forecast(days: int = 28, store_id: str | None = None, sku_id: str | None = N
     rows = query.all()
     history = {}
     for r in rows:
-        day = r.date.isoformat(); history[day] = history.get(day, 0) + r.quantity_sold * (r.unit_price or 1)
+        day = r.date.isoformat(); history[day] = history.get(day, 0) + r.quantity_sold * r.unit_price
     latest = db.query(ModelRun).filter_by(organization_id=user.organization_id).order_by(ModelRun.created_at.desc(), ModelRun.id.desc()).first()
     artifact_id = active_artifact_id(latest)
-    items = predict(rows, artifact_id, days) if rows and artifact_id else []
-    return {"source": "trained" if items else "empty", "items": items, "history": [{"date": day, "actual": round(value, 2)} for day, value in sorted(history.items())[-28:]]}
+    result = predict(rows, artifact_id, days) if rows and artifact_id else {"items": [], "coverage": {"series_used": 0, "series_total": len({(r.store_id, r.sku_id, r.channel) for r in rows})}}
+    return {"source": "trained" if result["items"] else "empty", **result, "history": [{"date": day, "actual": round(value, 2)} for day, value in sorted(history.items())[-28:]]}
 
 @app.post("/api/v1/uploads/validate")
 async def validate_upload(file: UploadFile = File(...), user: User = Depends(current_user)):
     frame = await read_and_validate(file)
-    return {"valid": True, "rows": len(frame), "columns": list(frame.columns), "date_range": {"from": str(frame.date.min().date()), "to": str(frame.date.max().date())}, "message": "ไฟล์ผ่านการตรวจสอบและไม่พบคอลัมน์ PII"}
+    return {"valid": True, "rows": len(frame), "missing_days": missing_calendar_days(frame), "columns": list(frame.columns), "date_range": {"from": str(frame.date.min().date()), "to": str(frame.date.max().date())}, "message": "ไฟล์ผ่านการตรวจสอบและไม่พบคอลัมน์ PII"}
 
 @app.post("/api/v1/uploads/import")
 async def import_upload(request: Request, file: UploadFile = File(...), user: User = Depends(writable_user), db: Session = Depends(get_db)):
@@ -125,7 +143,14 @@ async def import_upload(request: Request, file: UploadFile = File(...), user: Us
         records.append(SalesRecord(organization_id=user.organization_id, date=row["date"].date(), store_id=str(row["store_id"]), store_name=row.get("store_name"), sku_id=str(row["sku_id"]), sku_name=row.get("sku_name"), category=row.get("category"), channel=str(row.get("channel") or "unknown"), quantity_sold=float(row["quantity_sold"]), unit_price=float(row["unit_price"]) if row.get("unit_price") is not None else None, discount=float(row["discount"]) if row.get("discount") is not None else None, promotion_flag=bool(row.get("promotion_flag") or False), holiday_flag=bool(row.get("holiday_flag") or False)))
     db.add_all(records); db.commit()
     previous_runs = db.query(ModelRun).filter_by(organization_id=user.organization_id).all()
-    old_artifacts = [artifact_path(artifact_id) for run in previous_runs if (artifact_id := active_artifact_id(run))]
+    old_artifacts = []
+    for run in previous_runs:
+        artifact_id = run_metrics(run).get("_artifact_id")
+        if isinstance(artifact_id, str):
+            try:
+                old_artifacts.append(artifact_path(artifact_id))
+            except ValueError:
+                pass
     db.execute(delete(ModelRun).where(ModelRun.organization_id == user.organization_id)); db.commit()
     for path in old_artifacts:
         path.unlink(missing_ok=True)
@@ -154,5 +179,5 @@ def export_sales(user: User = Depends(current_user), db: Session = Depends(get_d
     output = io.StringIO(); writer = csv.writer(output)
     writer.writerow(["date", "store_id", "sku_id", "category", "channel", "quantity_sold", "unit_price"])
     for r in db.query(SalesRecord).filter_by(organization_id=user.organization_id).order_by(SalesRecord.date).all():
-        writer.writerow([r.date.isoformat(), r.store_id, r.sku_id, r.category or "", r.channel, r.quantity_sold, r.unit_price or ""])
+        writer.writerow([r.date.isoformat(), r.store_id, r.sku_id, r.category or "", r.channel, r.quantity_sold, r.unit_price if r.unit_price is not None else ""])
     return StreamingResponse(iter(["\ufeff" + output.getvalue()]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=projecta-sales.csv"})

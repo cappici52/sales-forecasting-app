@@ -4,8 +4,8 @@ import re
 import pandas as pd
 from fastapi import HTTPException, UploadFile
 
-REQUIRED = {"date", "store_id", "sku_id", "quantity_sold"}
-OPTIONAL = {"store_name", "sku_name", "category", "channel", "unit_price", "discount", "promotion_flag", "holiday_flag"}
+REQUIRED = {"date", "store_id", "sku_id", "quantity_sold", "unit_price"}
+OPTIONAL = {"store_name", "sku_name", "category", "channel", "discount", "promotion_flag", "holiday_flag"}
 PII_TERMS = {"name", "customer", "email", "phone", "mobile", "address", "person", "customer_name", "first_name", "last_name"}
 
 async def read_and_validate(file: UploadFile) -> pd.DataFrame:
@@ -25,17 +25,19 @@ async def read_and_validate(file: UploadFile) -> pd.DataFrame:
     if missing: raise HTTPException(422, f"ขาดคอลัมน์จำเป็น: {', '.join(sorted(missing))}")
     frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
     if frame["date"].isna().any(): raise HTTPException(422, "พบวันที่ที่ไม่ถูกต้อง")
-    frame["quantity_sold"] = pd.to_numeric(frame["quantity_sold"], errors="coerce")
+    frame["date"] = frame["date"].dt.normalize()
+    frame["quantity_sold"] = pd.to_numeric(frame["quantity_sold"], errors="coerce").replace([float("inf"), float("-inf")], float("nan"))
     if frame["quantity_sold"].isna().any() or (frame["quantity_sold"] < 0).any(): raise HTTPException(422, "quantity_sold ต้องเป็นตัวเลขและห้ามติดลบ")
-    if len(frame) < 60: raise HTTPException(422, "ต้องมีอย่างน้อย 60 แถวเพื่อให้พยากรณ์ได้มีความหมาย")
+    if frame["date"].nunique() < 90: raise HTTPException(422, "ต้องมีข้อมูลอย่างน้อย 90 วันเพื่อประเมินย้อนหลัง")
     if frame[["store_id", "sku_id"]].isna().any().any() or frame[["store_id", "sku_id"]].astype(str).apply(lambda col: col.str.strip().eq("")).any().any():
         raise HTTPException(422, "store_id และ sku_id ห้ามว่าง")
     for field in ("unit_price", "discount"):
         if field in frame:
             original = frame[field]
-            frame[field] = pd.to_numeric(original, errors="coerce")
+            frame[field] = pd.to_numeric(original, errors="coerce").replace([float("inf"), float("-inf")], float("nan"))
             if (original.notna() & frame[field].isna()).any(): raise HTTPException(422, f"{field} ต้องเป็นตัวเลข")
             if (frame[field].dropna() < 0).any(): raise HTTPException(422, f"{field} ห้ามติดลบ")
+    if frame["unit_price"].isna().any(): raise HTTPException(422, "unit_price ห้ามว่าง เพราะระบบแสดงผลเป็นบาท")
     for field in ("promotion_flag", "holiday_flag"):
         if field in frame:
             values = frame[field].astype(str).str.strip().str.lower()
@@ -49,3 +51,11 @@ async def read_and_validate(file: UploadFile) -> pd.DataFrame:
         raise HTTPException(422, "พบข้อมูลซ้ำในวัน/สาขา/SKU/ช่องทางเดียวกัน")
     frame = frame.astype(object).where(pd.notna(frame), None)
     return frame[list(REQUIRED | OPTIONAL)]
+
+
+def missing_calendar_days(frame: pd.DataFrame) -> int:
+    """Count absent dates inside each store/SKU/channel series; zero-sale rows are present."""
+    missing = 0
+    for _, group in frame.groupby(["store_id", "sku_id", "channel"]):
+        missing += (group.date.max() - group.date.min()).days + 1 - len(group)
+    return int(missing)
