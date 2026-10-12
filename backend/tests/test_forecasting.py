@@ -76,6 +76,10 @@ class ForecastingTests(unittest.TestCase):
             self.assertEqual(len(forecast["items"]), 7)
             self.assertEqual(forecast["items"][0]["date"], "2026-05-31")
             self.assertEqual(forecast["coverage"], {"series_used": 2, "series_total": 2})
+            snapshots = forecasting.snapshot_predictions(records, metrics["_artifact_id"])
+            self.assertEqual(len(snapshots), 56)
+            self.assertEqual(snapshots[0]["target_date"], date(2026, 5, 31))
+            self.assertEqual({item["channel"] for item in snapshots}, {"in_store", "online"})
         self.assertEqual(fit_dates, [date(2026, 3, 7), date(2026, 4, 4), date(2026, 5, 2), date(2026, 5, 30)])
 
     def test_missing_price_is_rejected_and_zero_price_is_preserved(self):

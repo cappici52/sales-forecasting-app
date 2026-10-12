@@ -177,3 +177,19 @@ def predict(records: list, artifact_id: str, days: int) -> dict:
         "items": [{"date": date.strftime("%Y-%m-%d"), "forecast": round(value, 2)} for date, value in sorted(total.items())],
         "coverage": {"series_used": len(projections), "series_total": frame[GRAIN].drop_duplicates().shape[0]},
     }
+
+def snapshot_predictions(records: list, artifact_id: str) -> list[dict]:
+    """Persist the 28-day, per-series forecast before future actuals are imported."""
+    frame = prepare(records)
+    if frame.empty:
+        return []
+    origin = frame.date.max()
+    model = joblib.load(artifact_path(artifact_id))
+    projections = forecast_series(frame, model, origin, 28)
+    categories = {(r.store_id, r.sku_id, r.channel): getattr(r, "category", None) for r in records}
+    return [{
+        "origin_date": origin.date(), "target_date": (origin + pd.Timedelta(days=offset)).date(),
+        "store_id": key[0], "sku_id": key[1], "channel": key[2],
+        "category": categories.get(key), "forecast_revenue": round(quantity * price, 2),
+    } for key, (quantities, _, price) in projections.items()
+      for offset, quantity in enumerate(quantities, start=1)]

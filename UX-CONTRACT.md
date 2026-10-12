@@ -4,6 +4,7 @@
 
 - Audience: Thai business owners working with store and SKU sales data.
 - Primary jobs: sign in, import and validate sales, train a model, inspect a forecast, export data.
+- Planning jobs: inspect saved forecast versus later actuals and explore clearly labeled arithmetic what-if assumptions.
 - Active locales: Thai and English. Timezone is not inferred from the browser for stored sales dates.
 - Accessibility target: keyboard-accessible controls and WCAG 2.2 AA contrast intent.
 
@@ -31,6 +32,8 @@
 | Upload validation | Import action unavailable | Row count, date range, and missing-calendar-day warning | Error banner, file retained |
 | Import | Confirm disabled | Overview refresh | Error banner, retry file |
 | Train | Train button disabled | Metrics and forecast available | Error banner, retry training |
+| Review saved forecast | Report loading within forecast page | Week/month matched-pair report, coverage visible | Inline error with retry; prior values cleared |
+| What-if | Local slider adjustment | Recomputed arithmetic revenue, original forecast unchanged | Reset assumptions; unavailable until forecast exists |
 | Export | Browser download | CSV saved | Error banner |
 | Logout | Immediate request | Login screen | Local session cleared |
 
@@ -45,3 +48,5 @@ The selected section is visible in the sidebar on desktop and in the fixed botto
 If the latest model run is recorded but its artifact is unavailable, display a distinct “model file unavailable” state and direct the user to retrain. Historical sales may still be charted, but must be labeled as actual data only; no forecast total, model badge, or forecast table is shown until forecast items exist.
 
 The model page displays rolling 7/14/28-day WAPE beside the previous-week baseline, plus 28-day MAE/RMSE and the highest-error evaluated stores/SKUs. Older runs without rolling results prompt retraining. A forecast with incomplete recent series states how many store/SKU/channel series were included. Imported data with missing calendar dates warns that absent days are not zero sales. If legacy records lack `unit_price`, suppress monetary totals and forecasts and direct the owner to re-import complete data.
+
+Training also saves an immutable 28-day per-series forecast snapshot. Re-importing sales marks the model run superseded and removes its model file, but keeps the run ID and snapshot so the comparison report remains available. Week starts Monday (ISO); month starts on day 1. A difference is shown only for forecast rows with matching actual date/store/SKU/channel and a price; partial coverage is explicit. What-if sliders only multiply the current forecast by price and volume factors; their values are not stored or claimed as causal ML predictions.

@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session
 from .auth import COOKIE_NAME, SignIn, SignUp, check_origin, current_user, hash_password, normalize_email, set_session, token_hash, verify_password, writable_user
 from .config import settings
 from .database import Base, engine, get_db
-from .models import AuthSession, ModelRun, Organization, SalesRecord, User
+from .models import AuthSession, ForecastSnapshot, ModelRun, Organization, SalesRecord, User
 from .services import missing_calendar_days, read_and_validate
-from .forecasting import artifact_path, train as train_model, predict
+from .forecasting import artifact_path, train as train_model, predict, snapshot_predictions
 
 def run_metrics(run: ModelRun | None) -> dict:
     if not run or not run.metrics_json:
@@ -105,6 +105,7 @@ def summary(user: User = Depends(current_user), db: Session = Depends(get_db)):
         "invalid_data": "ข้อมูลบางแถวไม่มี unit_price กรุณานำเข้าใหม่",
         "needs_retrain": "โมเดลเดิมใช้วิธีประเมินเก่า กรุณาเทรนใหม่",
         "missing": "ไฟล์โมเดลไม่พร้อม กรุณาเทรนใหม่",
+        "superseded": "นำเข้าข้อมูลชุดใหม่แล้ว กรุณาเทรนโมเดลใหม่",
     }
     metrics = {"error": errors[model_status]} if model_status in errors else public_metrics(latest)
     return {"record_count": len(rows), "store_count": len({r.store_id for r in rows}), "sku_count": len({r.sku_id for r in rows}), "latest_date": max((r.date.isoformat() for r in rows), default=None), "total_revenue": round(sum(r.quantity_sold * r.unit_price for r in rows), 2) if not price_missing_count else None, "price_missing_count": price_missing_count, "model": {"status": model_status, "created_at": latest.created_at.isoformat(), "metrics": metrics } if latest else None, "stores": sorted({r.store_id for r in rows}), "skus": sorted({r.sku_id for r in rows}), "categories": sorted({r.category for r in rows if r.category}), "channels": sorted({r.channel for r in rows})}
@@ -127,6 +128,55 @@ def forecast(days: int = 28, store_id: str | None = None, sku_id: str | None = N
     artifact_id = active_artifact_id(latest)
     result = predict(rows, artifact_id, days) if rows and artifact_id else {"items": [], "coverage": {"series_used": 0, "series_total": len({(r.store_id, r.sku_id, r.channel) for r in rows})}}
     return {"source": "trained" if result["items"] else "empty", **result, "history": [{"date": day, "actual": round(value, 2)} for day, value in sorted(history.items())[-28:]]}
+
+@app.get("/api/v1/reports/forecast-vs-actual")
+def forecast_vs_actual(grain: str = "week", run_id: int | None = None, store_id: str | None = None,
+                       sku_id: str | None = None, category: str | None = None, channel: str | None = None,
+                       user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if grain not in ("week", "month"):
+        raise HTTPException(422, "เลือกรายงานรายสัปดาห์หรือรายเดือน")
+    runs = (db.query(ForecastSnapshot.model_run_id, ForecastSnapshot.origin_date)
+            .filter_by(organization_id=user.organization_id).distinct()
+            .order_by(ForecastSnapshot.origin_date.desc(), ForecastSnapshot.model_run_id.desc()).limit(20).all())
+    available = {item.model_run_id for item in runs}
+    if run_id is not None and run_id not in available:
+        raise HTTPException(404, "ไม่พบชุดพยากรณ์นี้")
+    selected = run_id if run_id is not None else (runs[0].model_run_id if runs else None)
+    if selected is None:
+        return {"runs": [], "run_id": None, "origin_date": None, "grain": grain, "periods": []}
+    query = db.query(ForecastSnapshot).filter_by(organization_id=user.organization_id, model_run_id=selected)
+    if store_id: query = query.filter_by(store_id=store_id)
+    if sku_id: query = query.filter_by(sku_id=sku_id)
+    if category: query = query.filter_by(category=category)
+    if channel: query = query.filter_by(channel=channel)
+    predictions = query.order_by(ForecastSnapshot.target_date).all()
+    if predictions:
+        first, last = predictions[0].target_date, predictions[-1].target_date
+        actual_rows = (db.query(SalesRecord).filter(SalesRecord.organization_id == user.organization_id,
+                       SalesRecord.date >= first, SalesRecord.date <= last).all())
+    else:
+        actual_rows = []
+    actual = {(row.date, row.store_id, row.sku_id, row.channel): row for row in actual_rows}
+    periods = {}
+    for prediction in predictions:
+        day = prediction.target_date
+        period = (day.replace(day=1) if grain == "month" else day.fromordinal(day.toordinal() - day.weekday())).isoformat()
+        bucket = periods.setdefault(period, {"period": period, "forecast_total": 0.0, "forecast_matched": 0.0,
+                                              "actual": 0.0, "matched_count": 0, "forecast_count": 0})
+        bucket["forecast_total"] += prediction.forecast_revenue
+        bucket["forecast_count"] += 1
+        observed = actual.get((day, prediction.store_id, prediction.sku_id, prediction.channel))
+        if observed is not None and observed.unit_price is not None:
+            bucket["forecast_matched"] += prediction.forecast_revenue
+            bucket["actual"] += observed.quantity_sold * observed.unit_price
+            bucket["matched_count"] += 1
+    for bucket in periods.values():
+        for key in ("forecast_total", "forecast_matched", "actual"):
+            bucket[key] = round(bucket[key], 2)
+        bucket["difference"] = round(bucket["actual"] - bucket["forecast_matched"], 2) if bucket["matched_count"] else None
+    return {"runs": [{"run_id": item.model_run_id, "origin_date": item.origin_date.isoformat()} for item in runs],
+            "run_id": selected, "origin_date": next(item.origin_date.isoformat() for item in runs if item.model_run_id == selected),
+            "grain": grain, "periods": list(periods.values())}
 
 @app.post("/api/v1/uploads/validate")
 async def validate_upload(file: UploadFile = File(...), user: User = Depends(current_user)):
@@ -151,7 +201,13 @@ async def import_upload(request: Request, file: UploadFile = File(...), user: Us
                 old_artifacts.append(artifact_path(artifact_id))
             except ValueError:
                 pass
-    db.execute(delete(ModelRun).where(ModelRun.organization_id == user.organization_id)); db.commit()
+    # Keep run IDs stable: saved forecasts refer to them even after a dataset replacement.
+    for run in previous_runs:
+        run.status = "superseded"
+        old_metrics = run_metrics(run)
+        old_metrics.pop("_artifact_id", None)
+        run.metrics_json = json.dumps(old_metrics)
+    db.commit()
     for path in old_artifacts:
         path.unlink(missing_ok=True)
     return {"imported": len(records), "message": "นำเข้าข้อมูลสำเร็จ"}
@@ -165,12 +221,37 @@ def train(request: Request, user: User = Depends(writable_user), db: Session = D
     if not records:
         run.status = "failed"; run.metrics_json = '{"error":"ยังไม่มีข้อมูลที่นำเข้า"}'; db.commit()
         return {"run_id": run.id, "status": run.status, "message": "กรุณานำเข้าข้อมูลก่อนเทรนโมเดล"}
+    artifact_id = None
     try:
         metrics = train_model(records)
+        artifact_id = metrics["_artifact_id"]
+        snapshots = snapshot_predictions(records, artifact_id)
+        db.add_all(ForecastSnapshot(organization_id=user.organization_id, model_run_id=run.id, **item) for item in snapshots)
         run.status = "completed"; run.metrics_json = json.dumps(metrics)
     except ValueError as exc:
+        if artifact_id:
+            artifact_path(artifact_id).unlink(missing_ok=True)
         run.status = "failed"; run.metrics_json = json.dumps({"error": str(exc)})
-    db.commit()
+    except Exception:
+        db.rollback()
+        if artifact_id:
+            artifact_path(artifact_id).unlink(missing_ok=True)
+        run = db.get(ModelRun, run.id)
+        if run:
+            run.status = "failed"; run.metrics_json = json.dumps({"error": "เทรนโมเดลหรือสร้างผลพยากรณ์ไม่สำเร็จ"})
+            db.commit()
+        raise HTTPException(500, "เทรนโมเดลหรือสร้างผลพยากรณ์ไม่สำเร็จ")
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        if artifact_id:
+            artifact_path(artifact_id).unlink(missing_ok=True)
+        run = db.get(ModelRun, run.id)
+        if run:
+            run.status = "failed"; run.metrics_json = json.dumps({"error": "บันทึกผลพยากรณ์ไม่สำเร็จ กรุณาลองเทรนใหม่"})
+            db.commit()
+        raise HTTPException(500, "บันทึกผลพยากรณ์ไม่สำเร็จ กรุณาลองเทรนใหม่")
     return {"run_id": run.id, "status": run.status, "metrics": public_metrics(run)}
 
 @app.get("/api/v1/export")

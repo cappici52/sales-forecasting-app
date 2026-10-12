@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
@@ -50,3 +50,22 @@ class ModelRun(Base):
     status: Mapped[str] = mapped_column(String(30), default="queued")
     metrics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class ForecastSnapshot(Base):
+    """Immutable prediction made at training time; retained when sales are re-imported."""
+    __tablename__ = "forecast_snapshots"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "model_run_id", "target_date", "store_id", "sku_id", "channel", name="uq_snapshot_grain"),
+        Index("ix_snapshots_org_target", "organization_id", "target_date"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    # Deliberately no FK: a new upload removes obsolete model runs, not historical forecasts.
+    model_run_id: Mapped[int] = mapped_column(Integer, index=True)
+    origin_date: Mapped[date] = mapped_column(Date)
+    target_date: Mapped[date] = mapped_column(Date)
+    store_id: Mapped[str] = mapped_column(String(80))
+    sku_id: Mapped[str] = mapped_column(String(100))
+    channel: Mapped[str] = mapped_column(String(80))
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    forecast_revenue: Mapped[float] = mapped_column(Float)
