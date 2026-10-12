@@ -66,6 +66,8 @@ Buttons have hover, focus, busy, and disabled states. Navigation has selected st
 
 Iconography uses one outline SVG family instead of mixed Unicode glyphs. Motion is brief and purposeful: staggered card arrival, directional navigation feedback, chart reveal, and press states. All animation is removed under `prefers-reduced-motion`. No animation should imply a value changed when data did not.
 
+The brandmark is a transparent pixel-art black cat with gold eyes and a red bow on a pale lavender tile. It appears on the login panel, desktop navigation rail, and browser icon. Its one-time scale entrance is decorative and never conveys model status. Motion inspired by Motion Reference uses a 600ms, 24px fade-and-slide for newly mounted content, a 520ms logo pop, and a 680ms one-shot focus pulse for selected navigation and positive feedback. Charts and numeric values remain stable while data changes; reduced-motion mode suppresses these effects.
+
 ## Do's and Don'ts
 
 - Do show actual imported data and measured model quality.

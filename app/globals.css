@@ -303,3 +303,64 @@ tbody tr:last-child td { border-bottom: 0; }
 .future-period-list span { font-size: 11px; color: var(--muted); }
 .future-period-list strong { font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) { .scenario-layout { grid-template-columns: 1fr; } .report-controls label, .report-controls select { width: 100%; } }
+
+/* Motion Reference adaptations: readable entrances, a one-time logo pop and restrained focus feedback. */
+.brandmark {
+  background: #e9e6ff url('/cat-logo.png') center / 92% no-repeat;
+  color: transparent;
+  font-size: 0;
+  flex: 0 0 auto;
+  box-shadow: 0 7px 18px rgba(13, 19, 39, .2);
+  image-rendering: pixelated;
+}
+.auth-story > .brandmark, .app-brand .brandmark {
+  animation: motion-pop-scale .52s cubic-bezier(.34, 1.56, .64, 1) both;
+}
+.auth-card, .page-content > .page-heading, .stat, .surface, .filter-bar, .quick-row, .insights-stack {
+  animation: motion-fade-slide .6s cubic-bezier(.22, 1, .36, 1) both;
+}
+.stat:nth-child(2) { animation-delay: .06s; }
+.stat:nth-child(3) { animation-delay: .12s; }
+.stat:nth-child(4) { animation-delay: .18s; }
+.content-grid > .surface:nth-child(2) { animation-delay: .1s; }
+.banner.success, .validation { position: relative; isolation: isolate; }
+.banner.success::after, .validation::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 2px solid currentColor;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: motion-focus-pulse .68s cubic-bezier(.22, 1, .36, 1) both;
+}
+.app-sidebar nav button.selected::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(166, 156, 255, .6);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: motion-focus-pulse .68s cubic-bezier(.22, 1, .36, 1) both;
+}
+@keyframes motion-fade-slide {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes motion-pop-scale {
+  from { opacity: 0; transform: scale(.86); }
+  70% { opacity: 1; transform: scale(1.06); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes motion-focus-pulse {
+  from { opacity: .52; transform: scale(1); }
+  to { opacity: 0; transform: scale(1.045); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-story > .brandmark, .app-brand .brandmark,
+  .auth-card, .page-content > .page-heading, .stat, .surface, .filter-bar,
+  .quick-row, .insights-stack, .banner.success::after, .validation::after,
+  .app-sidebar nav button.selected::after {
+    animation: none;
+  }
+  .banner.success::after, .validation::after { display: none; }
+}

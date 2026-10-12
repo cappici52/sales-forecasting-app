@@ -45,6 +45,8 @@ All data APIs require a session. Import and training require owner or manager on
 
 The selected section is visible in the sidebar on desktop and in the fixed bottom bar on mobile. Language and theme switches preserve preference in local storage when available. Status messages use `role=status` or `role=alert`. The forecast table is the text alternative to the chart.
 
+Section entrances and success emphasis are visual-only; they do not delay controls or announce false data changes. The pixel-art cat identifies the product on auth, navigation, and favicon surfaces. With `prefers-reduced-motion: reduce`, entrance, pop, and pulse animations are disabled.
+
 If the latest model run is recorded but its artifact is unavailable, display a distinct “model file unavailable” state and direct the user to retrain. Historical sales may still be charted, but must be labeled as actual data only; no forecast total, model badge, or forecast table is shown until forecast items exist.
 
 The model page displays rolling 7/14/28-day WAPE beside the previous-week baseline, plus 28-day MAE/RMSE and the highest-error evaluated stores/SKUs. Older runs without rolling results prompt retraining. A forecast with incomplete recent series states how many store/SKU/channel series were included. Imported data with missing calendar dates warns that absent days are not zero sales. If legacy records lack `unit_price`, suppress monetary totals and forecasts and direct the owner to re-import complete data.
