@@ -108,6 +108,7 @@ uvicorn app.main:app --reload
 - `POST /api/v1/uploads/import` — บันทึกข้อมูลขายลงฐานข้อมูลที่ตั้งค่าไว้
 - `POST /api/v1/models/train` — เทรนโมเดล XGBoost
 - `backend/scripts/benchmark_models.py` — เปรียบเทียบโมเดลกับ baseline แบบอ่านอย่างเดียว โดยกัน 28 วันท้ายไว้เป็น holdout (ต้องตั้ง `backend/.env` ให้ชี้ PostgreSQL)
+- `backend/scripts/benchmark_olist.py` — ประเมินกับข้อมูล Olist แหล่งใหม่แบบอ่าน CSV อย่างเดียว ไม่ใช้ฐานข้อมูลแอป; ดูวิธีรัน ผล และข้อจำกัดใน [รายงาน Olist](reports/olist-independent-benchmark.md)
 - `GET /api/v1/export` — ดาวน์โหลดข้อมูลขาย CSV
 
 ไฟล์โมเดลที่เทรนแล้วอยู่ใน `backend/artifacts/` และผูกด้วยรหัสสุ่มที่บันทึกไว้ในผลการเทรนของฐานข้อมูลนั้นโดยเฉพาะ การสลับ SQLite ↔ PostgreSQL หรือการสร้างองค์กรใหม่ที่ได้เลข ID เดิมจะไม่หยิบโมเดลจากอีกฐานข้อมูลมาใช้ หากฐานข้อมูลไม่มีรายการเทรนที่ตรงกับไฟล์โมเดล ระบบจะแสดงให้เทรนใหม่ การนำเข้าข้อมูลชุดใหม่จะยกเลิกผลการเทรนเดิมขององค์กรนั้น
