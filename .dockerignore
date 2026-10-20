@@ -1,0 +1,10 @@
+.env*
+backend/.env*
+backend/.venv/
+backend/artifacts/
+backend/*.db
+node_modules/
+.next/
+.git/
+artifacts/
+work/

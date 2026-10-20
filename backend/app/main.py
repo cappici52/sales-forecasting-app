@@ -42,7 +42,9 @@ def public_metrics(run: ModelRun | None) -> dict:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    # SQLite remains a zero-setup demo; PostgreSQL schemas are managed by Alembic.
+    if settings.database_url.startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
     yield
 
 app = FastAPI(title="ProjectA_1 API", version="0.1.0", lifespan=lifespan)
