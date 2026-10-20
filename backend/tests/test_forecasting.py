@@ -77,6 +77,10 @@ class ForecastingTests(unittest.TestCase):
             self.assertEqual(len(forecast["items"]), 7)
             self.assertEqual(forecast["items"][0]["date"], "2026-05-31")
             self.assertEqual(forecast["coverage"], {"series_used": 2, "series_total": 2})
+            segments = forecasting.segment_forecasts(records, metrics["_artifact_id"], 7)
+            self.assertEqual({item["channel"] for item in segments}, {"in_store", "online"})
+            self.assertAlmostEqual(sum(item["forecast_revenue"] for item in segments),
+                                   sum(item["forecast"] for item in forecast["items"]), places=1)
             snapshots = forecasting.snapshot_predictions(records, metrics["_artifact_id"])
             self.assertEqual(len(snapshots), 56)
             self.assertEqual(snapshots[0]["target_date"], date(2026, 5, 31))
@@ -88,6 +92,36 @@ class ForecastingTests(unittest.TestCase):
         model = forecasting.fit(rows)
         self.assertEqual(model.get_params()["objective"], "count:poisson")
         self.assertTrue((model.predict(rows[forecasting.FEATURES]) >= 0).all())
+
+    def test_weak_model_uses_weekly_baseline_for_forecast_and_snapshot(self):
+        records = sales()
+        with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)), patch.object(forecasting, "fit", return_value=ConstantModel()):
+            metrics = forecasting.train(records)
+            self.assertEqual(metrics["forecast_methods"], {"7": "weekly_naive", "14": "weekly_naive", "28": "weekly_naive"})
+            artifact_id = metrics["_artifact_id"]
+            forecast = forecasting.predict(records, artifact_id, 28)
+            self.assertEqual(forecast["method"], "weekly_naive")
+            frame = forecasting.prepare(records)
+            series = forecasting.forecast_series(frame, ConstantModel(), frame.date.max(), 28)
+            expected = sum(baseline[0] * price for _, baseline, price in series.values())
+            self.assertAlmostEqual(forecast["items"][0]["forecast"], expected, places=2)
+            segments = forecasting.segment_forecasts(records, artifact_id)
+            self.assertAlmostEqual(sum(item["forecast_revenue"] for item in segments),
+                                   sum(item["forecast"] for item in forecast["items"]), places=1)
+            snapshots = forecasting.snapshot_predictions(records, artifact_id)
+            self.assertEqual(len(snapshots), 56)
+            self.assertAlmostEqual(sum(item["forecast_revenue"] for item in snapshots),
+                                   sum(item["forecast"] for item in forecast["items"]), places=1)
+
+    def test_old_artifact_stays_compatible_and_tie_uses_baseline(self):
+        self.assertEqual(forecasting.choose_method({"wape": 0.4, "baseline_wape": 0.4}), "weekly_naive")
+        self.assertEqual(forecasting.choose_method({"wape": 0.3, "baseline_wape": 0.4}), "xgboost")
+        with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)):
+            artifact_id = "a" * 32
+            forecasting.joblib.dump(ConstantModel(), forecasting.artifact_path(artifact_id))
+            model, methods = forecasting.load_artifact(artifact_id)
+            self.assertIsInstance(model, ConstantModel)
+            self.assertEqual(methods, {})
 
     def test_missing_price_is_rejected_and_zero_price_is_preserved(self):
         records = sales(days=90)

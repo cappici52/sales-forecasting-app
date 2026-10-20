@@ -162,7 +162,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .section-heading .muted { font-size: 12px; }
 .text-link { white-space: nowrap; font-size: 12px; }
 .chart-surface { min-height: 410px; }
-.trend-chart { height: 299px; margin-top: 20px; animation: chart-reveal .7s .12s ease both; }
+.trend-chart { height: 299px; margin-top: 20px; overflow: clip; animation: chart-reveal .7s .12s ease both; }
 .recharts-cartesian-axis-tick text { fill: var(--muted); font-size: 11px; }
 .recharts-default-tooltip { border-radius: 9px !important; box-shadow: var(--shadow); }
 .model-surface { min-height: 410px; display: flex; flex-direction: column; }
@@ -324,6 +324,44 @@ tbody tr:last-child td { border-bottom: 0; }
 .future-period-list span { font-size: 11px; color: var(--muted); }
 .future-period-list strong { font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) { .scenario-layout { grid-template-columns: 1fr; } .report-controls label, .report-controls select { width: 100%; } }
+
+/* Read-only SKU, channel, and weekday evidence stays subordinate to the main forecast chart. */
+.insight-section { display: grid; gap: 16px; margin: 17px 0; }
+.insight-heading { align-items: flex-end; gap: 18px; }
+.insight-heading h2 { margin: 4px 0; font-size: 21px; }
+.insight-asof, .insight-count { flex: 0 0 auto; color: var(--muted); font-size: 11px; font-weight: 700; }
+.insight-state { min-height: 168px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 9px; }
+.insight-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(260px, .8fr); gap: 16px; align-items: stretch; }
+.insight-grid > .surface { min-width: 0; }
+.insight-grid h3 { margin: 5px 0 8px; font-size: 16px; }
+.insight-grid .muted { font-size: 12px; }
+.insight-table { margin-top: 17px; max-height: 390px; }
+.insight-table table { min-width: 640px; font-variant-numeric: tabular-nums; }
+.insight-table th, .insight-table td { text-align: right; white-space: nowrap; }
+.insight-table th:first-child, .insight-table td:first-child { text-align: left; white-space: normal; min-width: 145px; }
+.insight-table td:first-child strong, .insight-table td:first-child small { display: block; overflow-wrap: anywhere; }
+.insight-table td:first-child small { color: var(--muted); font-size: 10px; font-weight: 500; }
+.insight-up { color: var(--teal); font-weight: 700; }
+.insight-down { color: var(--caution-text); font-weight: 700; }
+.insight-caption { margin-top: 14px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.insight-scroll-hint { display: none; margin-top: 8px; color: var(--muted); font-size: 11px; }
+.channel-list { display: grid; gap: 17px; margin-top: 22px; }
+.channel-item > div:first-child { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-size: 12px; }
+.channel-item strong { overflow-wrap: anywhere; }
+.channel-item small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.channel-track, .weekday-track { height: 7px; overflow: hidden; border-radius: 10px; background: var(--soft); }
+.channel-track { margin-top: 8px; }
+.channel-track > span, .weekday-track > span { display: block; height: 100%; border-radius: inherit; background: var(--teal); transition: width .45s ease; }
+.weekday-bars { display: grid; gap: 11px; margin-top: 20px; }
+.weekday-item { display: grid; grid-template-columns: 37px minmax(0, 1fr) 85px; align-items: center; gap: 10px; font-size: 11px; }
+.weekday-item strong { text-align: right; font-variant-numeric: tabular-nums; }
+.weekday-track > span { background: var(--primary); }
+.insight-unavailable { margin-top: 24px; }
+.insight-actions ul { display: grid; gap: 10px; margin: 20px 0 16px; padding-left: 19px; font-size: 12px; }
+.insight-actions li { padding-left: 2px; }
+.insight-actions .text-link { display: block; margin-top: 9px; }
+@media (max-width: 1100px) { .insight-grid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .insight-heading { align-items: flex-start; flex-direction: column; gap: 4px; } .insight-table { margin-left: -3px; margin-right: -3px; } .insight-scroll-hint { display: block; } }
 
 /* Motion Reference adaptations: readable entrances, a one-time logo pop and restrained focus feedback. */
 .brandmark {

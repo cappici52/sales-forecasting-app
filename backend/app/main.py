@@ -13,7 +13,8 @@ from .config import settings
 from .database import Base, engine, get_db
 from .models import AuthSession, ForecastSnapshot, ModelRun, Organization, SalesRecord, User
 from .services import missing_calendar_days, read_and_validate
-from .forecasting import artifact_path, train as train_model, predict, snapshot_predictions
+from .forecasting import artifact_path, train as train_model, predict, segment_forecasts, snapshot_predictions
+from .insights import build_insights
 from .quality import assess
 
 def run_metrics(run: ModelRun | None) -> dict:
@@ -134,6 +135,23 @@ def forecast(days: int = 28, store_id: str | None = None, sku_id: str | None = N
     artifact_id = active_artifact_id(latest)
     result = predict(rows, artifact_id, days) if rows and artifact_id else {"items": [], "coverage": {"series_used": 0, "series_total": len({(r.store_id, r.sku_id, r.channel) for r in rows})}}
     return {"source": "trained" if result["items"] else "empty", **result, "history": [{"date": day, "actual": round(value, 2)} for day, value in sorted(history.items())[-28:]]}
+
+
+@app.get("/api/v1/insights")
+def sales_insights(store_id: str | None = None, sku_id: str | None = None, category: str | None = None,
+                   channel: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    all_rows = db.query(SalesRecord).filter_by(organization_id=user.organization_id).all()
+    rows = [row for row in all_rows if (not store_id or row.store_id == store_id)
+            and (not sku_id or row.sku_id == sku_id) and (not category or row.category == category)
+            and (not channel or row.channel == channel)]
+    latest = db.query(ModelRun).filter_by(organization_id=user.organization_id).order_by(ModelRun.created_at.desc(), ModelRun.id.desc()).first()
+    artifact_id = active_artifact_id(latest)
+    today = datetime.now(ZoneInfo("Asia/Bangkok")).date()
+    quality = assess(public_metrics(latest), all_rows, today) if artifact_id and all_rows else None
+    price_complete = all(row.unit_price is not None for row in all_rows)
+    projected = segment_forecasts(rows, artifact_id) if rows and artifact_id and price_complete else []
+    return build_insights(rows, projected, today, review_needed=quality is not None and quality["status"] == "review",
+                          model_available=bool(artifact_id), price_complete=price_complete)
 
 @app.get("/api/v1/reports/forecast-vs-actual")
 def forecast_vs_actual(grain: str = "week", run_id: int | None = None, store_id: str | None = None,

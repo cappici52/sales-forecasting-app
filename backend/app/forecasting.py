@@ -113,6 +113,22 @@ def segment_scores(rows: list[tuple], index: int) -> list[dict]:
     scores = [{"id": key, "wape": measure(values)["wape"], "test_rows": len(values)} for key, values in groups.items()]
     return sorted(scores, key=lambda item: item["wape"] if item["wape"] is not None else -1, reverse=True)[:10]
 
+
+def choose_method(result: dict) -> str:
+    """Use the weekly benchmark when the model fails to beat it on rolling origins."""
+    model_error = result.get("wape")
+    baseline_error = result.get("baseline_wape")
+    if model_error is not None and baseline_error is not None and model_error >= baseline_error:
+        return "weekly_naive"
+    return "xgboost"
+
+
+def load_artifact(artifact_id: str) -> tuple[XGBRegressor, dict[int, str]]:
+    artifact = joblib.load(artifact_path(artifact_id))
+    if isinstance(artifact, dict) and artifact.get("version") == 2:
+        return artifact["model"], artifact["methods"]
+    return artifact, {}  # Existing model-only artifacts remain usable.
+
 def train(records: list) -> dict:
     frame = prepare(records)
     if frame.empty or frame.date.nunique() < 90:
@@ -150,12 +166,16 @@ def train(records: list) -> dict:
         raise ValueError("ไม่มีช่วงข้อมูลรายวันต่อเนื่องเพียงพอสำหรับประเมินย้อนหลัง กรุณาตรวจวันที่ที่ขาด")
 
     backtests = [{"days": days, "folds": folds, **measure(buckets[days])} for days in HORIZONS]
+    methods = {item["days"]: choose_method(item) for item in backtests}
+    for item in backtests:
+        item["selected_method"] = methods[item["days"]]
     metrics = {**measure(buckets[28]), "objective": "count:poisson", "train_rows": len(eligible), "backtests": backtests,
-               "by_store": segment_scores(buckets[28], 3), "by_sku": segment_scores(buckets[28], 4)}
+               "by_store": segment_scores(buckets[28], 3), "by_sku": segment_scores(buckets[28], 4),
+               "forecast_methods": {str(days): methods[days] for days in HORIZONS}}
     model = fit(eligible)  # Historical evaluation is complete; now use all known dates.
     artifact_id = secrets.token_hex(16)
     ARTIFACTS.mkdir(exist_ok=True)
-    joblib.dump(model, artifact_path(artifact_id))
+    joblib.dump({"version": 2, "model": model, "methods": methods}, artifact_path(artifact_id))
     metrics["_artifact_id"] = artifact_id
     return metrics
 
@@ -163,21 +183,41 @@ def predict(records: list, artifact_id: str, days: int) -> dict:
     path = artifact_path(artifact_id)
     if not path.exists():
         return {"items": [], "coverage": {"series_used": 0, "series_total": 0}}
-    model = joblib.load(path)
+    model, methods = load_artifact(artifact_id)
     frame = prepare(records)
     if frame.empty:
         return {"items": [], "coverage": {"series_used": 0, "series_total": 0}}
     origin = frame.date.max()
     total: dict[pd.Timestamp, float] = {}
     projections = forecast_series(frame, model, origin, days)
-    for predicted, _, price in projections.values():
-        for offset, quantity in enumerate(predicted, start=1):
+    method = methods.get(days, "xgboost")
+    for predicted, baseline, price in projections.values():
+        for offset, quantity in enumerate(baseline if method == "weekly_naive" else predicted, start=1):
             day = origin + pd.Timedelta(days=offset)
             total[day] = total.get(day, 0) + quantity * price
     return {
         "items": [{"date": date.strftime("%Y-%m-%d"), "forecast": round(value, 2)} for date, value in sorted(total.items())],
         "coverage": {"series_used": len(projections), "series_total": frame[GRAIN].drop_duplicates().shape[0]},
+        "method": method,
     }
+
+
+def segment_forecasts(records: list, artifact_id: str, days: int = 28) -> list[dict]:
+    """Return per-series totals from the same model and eligibility rule as /forecast."""
+    path = artifact_path(artifact_id)
+    if not path.exists():
+        return []
+    frame = prepare(records)
+    if frame.empty:
+        return []
+    model, methods = load_artifact(artifact_id)
+    projections = forecast_series(frame, model, frame.date.max(), days)
+    method = methods.get(days, "xgboost")
+    return [{
+        "store_id": key[0], "sku_id": key[1], "channel": key[2],
+        "forecast_units": round(float(sum(baseline if method == "weekly_naive" else predicted)), 2),
+        "forecast_revenue": round(float(sum(baseline if method == "weekly_naive" else predicted)) * price, 2),
+    } for key, (predicted, baseline, price) in projections.items()]
 
 def snapshot_predictions(records: list, artifact_id: str) -> list[dict]:
     """Persist the 28-day, per-series forecast before future actuals are imported."""
@@ -185,12 +225,13 @@ def snapshot_predictions(records: list, artifact_id: str) -> list[dict]:
     if frame.empty:
         return []
     origin = frame.date.max()
-    model = joblib.load(artifact_path(artifact_id))
+    model, methods = load_artifact(artifact_id)
     projections = forecast_series(frame, model, origin, 28)
+    method = methods.get(28, "xgboost")
     categories = {(r.store_id, r.sku_id, r.channel): getattr(r, "category", None) for r in records}
     return [{
         "origin_date": origin.date(), "target_date": (origin + pd.Timedelta(days=offset)).date(),
         "store_id": key[0], "sku_id": key[1], "channel": key[2],
         "category": categories.get(key), "forecast_revenue": round(quantity * price, 2),
-    } for key, (quantities, _, price) in projections.items()
-      for offset, quantity in enumerate(quantities, start=1)]
+    } for key, (predicted, baseline, price) in projections.items()
+      for offset, quantity in enumerate(baseline if method == "weekly_naive" else predicted, start=1)]
