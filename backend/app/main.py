@@ -1,6 +1,8 @@
 import io
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Response, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +14,7 @@ from .database import Base, engine, get_db
 from .models import AuthSession, ForecastSnapshot, ModelRun, Organization, SalesRecord, User
 from .services import missing_calendar_days, read_and_validate
 from .forecasting import artifact_path, train as train_model, predict, snapshot_predictions
+from .quality import assess
 
 def run_metrics(run: ModelRun | None) -> dict:
     if not run or not run.metrics_json:
@@ -110,7 +113,8 @@ def summary(user: User = Depends(current_user), db: Session = Depends(get_db)):
         "superseded": "นำเข้าข้อมูลชุดใหม่แล้ว กรุณาเทรนโมเดลใหม่",
     }
     metrics = {"error": errors[model_status]} if model_status in errors else public_metrics(latest)
-    return {"record_count": len(rows), "store_count": len({r.store_id for r in rows}), "sku_count": len({r.sku_id for r in rows}), "latest_date": max((r.date.isoformat() for r in rows), default=None), "total_revenue": round(sum(r.quantity_sold * r.unit_price for r in rows), 2) if not price_missing_count else None, "price_missing_count": price_missing_count, "model": {"status": model_status, "created_at": latest.created_at.isoformat(), "metrics": metrics } if latest else None, "stores": sorted({r.store_id for r in rows}), "skus": sorted({r.sku_id for r in rows}), "categories": sorted({r.category for r in rows if r.category}), "channels": sorted({r.channel for r in rows})}
+    quality = assess(metrics, rows, datetime.now(ZoneInfo("Asia/Bangkok")).date()) if model_status == "completed" and rows else None
+    return {"record_count": len(rows), "store_count": len({r.store_id for r in rows}), "sku_count": len({r.sku_id for r in rows}), "latest_date": max((r.date.isoformat() for r in rows), default=None), "total_revenue": round(sum(r.quantity_sold * r.unit_price for r in rows), 2) if not price_missing_count else None, "price_missing_count": price_missing_count, "model": {"status": model_status, "created_at": latest.created_at.isoformat(), "metrics": metrics, "quality": quality} if latest else None, "stores": sorted({r.store_id for r in rows}), "skus": sorted({r.sku_id for r in rows}), "categories": sorted({r.category for r in rows if r.category}), "channels": sorted({r.channel for r in rows})}
 
 @app.get("/api/v1/forecast")
 def forecast(days: int = 28, store_id: str | None = None, sku_id: str | None = None, category: str | None = None, channel: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):

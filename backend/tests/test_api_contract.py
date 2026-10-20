@@ -3,6 +3,7 @@ import asyncio
 import io
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from fastapi import UploadFile
 from sqlalchemy import create_engine
@@ -15,6 +16,30 @@ from app.models import ForecastSnapshot, ModelRun, Organization, SalesRecord, Us
 
 
 class ApiContractTests(unittest.TestCase):
+    def test_summary_exposes_forecast_review_without_changing_model_status(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            org = Organization(name="Review Org")
+            db.add(org); db.flush()
+            user = User(organization_id=org.id, email="review@example.test", display_name="Owner", password_hash="x", role="owner")
+            run = ModelRun(organization_id=org.id, status="completed", metrics_json=json.dumps({
+                "backtests": [{"days": 28, "folds": 3, "test_rows": 84, "wape": .6, "baseline_wape": .4}],
+                "_artifact_id": "a" * 32,
+            }))
+            db.add_all([user, run] + [SalesRecord(organization_id=org.id, date=date.fromordinal(date(2026, 1, 1).toordinal() + day),
+                                                   store_id="BKK", sku_id="A", channel="online", quantity_sold=2, unit_price=10)
+                                      for day in range(28)])
+            db.commit()
+            with patch("app.main.active_artifact_id", return_value="a" * 32):
+                result = summary(user=user, db=db)
+            self.assertEqual(result["model"]["status"], "completed")
+            self.assertEqual(result["model"]["quality"]["status"], "review")
+            self.assertIn("not_better_than_baseline", result["model"]["quality"]["reasons"])
+            self.assertEqual(result["model"]["quality"]["coverage"], {"series_used": 1, "series_total": 1})
+            self.assertNotIn("_artifact_id", result["model"]["metrics"])
+        engine.dispose()
+
     def test_new_import_keeps_saved_forecast_and_run_identity(self):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine)

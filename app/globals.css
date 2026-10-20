@@ -24,6 +24,9 @@
   --soft: #f0efff;
   --shadow: 0 14px 34px rgba(25, 45, 83, .045), 0 1px 2px rgba(25, 45, 83, .035);
   --ring: rgba(91, 79, 231, .24);
+  --caution-bg: #fff9eb;
+  --caution-border: #e8c777;
+  --caution-text: #705014;
 }
 [data-theme="dark"] {
   --bg: #0d1523;
@@ -42,6 +45,9 @@
   --soft: #292a52;
   --shadow: 0 14px 35px rgba(0, 0, 0, .15);
   --ring: rgba(166, 156, 255, .32);
+  --caution-bg: #302a1d;
+  --caution-border: #b5914b;
+  --caution-text: #f3d99f;
 }
 html { scrollbar-color: var(--muted) var(--bg); }
 body { font-size: 14px; line-height: 1.6; letter-spacing: -.008em; }
@@ -208,6 +214,21 @@ tbody tr:last-child td { border-bottom: 0; }
 .setting-row button:hover { border-color: var(--primary); color: var(--primary); background: var(--soft); }
 .topbar { position: sticky; top: 0; z-index: 15; box-shadow: 0 2px 12px rgba(20, 34, 56, .03); }
 .model-warning { color: var(--muted); font-size: 12px; margin: -5px 0 8px; }
+.quality-notice { background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: 11px; padding: 18px 21px; margin: 0 0 19px; box-shadow: var(--shadow); }
+.quality-notice.review { background: var(--caution-bg); border-color: var(--caution-border); color: var(--caution-text); }
+.quality-notice.review .overline { color: var(--caution-text); }
+.quality-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.quality-header h2 { font-size: 17px; margin: 3px 0; }
+.quality-header p:not(.overline), .quality-footnote { font-size: 12px; }
+.quality-header .text-link { white-space: nowrap; }
+.quality-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.quality-facts span { display: grid; gap: 1px; padding-top: 9px; border-top: 1px solid var(--border); }
+.quality-notice.review .quality-facts span { border-color: var(--caution-border); }
+.quality-facts small { font-size: 11px; opacity: .85; }
+.quality-facts strong { font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.quality-notice ul { margin: 12px 0 0; padding-left: 20px; font-size: 12px; }
+.quality-footnote { margin-top: 12px; opacity: .82; }
+@media(max-width:720px) { .quality-header { flex-direction: column; gap: 7px; } .quality-facts { grid-template-columns: 1fr; gap: 5px; } }
 .evaluation-table { margin-top: 19px; max-height: none; }
 .model-grid { grid-template-columns: minmax(300px, .9fr) minmax(450px, 1.1fr); align-items: start; }
 .evaluation-table th, .evaluation-table td { font-variant-numeric: tabular-nums; }

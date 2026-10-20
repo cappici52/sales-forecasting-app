@@ -44,6 +44,8 @@ Thai is the primary language, with English available through a visible switch. N
 
 `background`, `surface`, `text`, `muted`, and `border` establish information hierarchy. `primary` marks the future forecast line and accents; `action` is the darker solid-button fill that keeps white button text legible in both themes; `teal` marks observed sales. The sidebar has its own dark surface. Success and error banners use semantic tinted backgrounds and readable text. Dark mode remaps the same hierarchy without changing meaning. Runtime CSS variables in `app/globals.css` own exact values; this file records accepted intent and mirrors those values.
 
+Forecast review notices use the `caution-*` semantic tokens from `app/globals.css` in both themes. They are persistent and include the measured reason in text; color alone never signals reliability.
+
 ## Typography
 
 Display headings and large numbers use Space Grotesk with IBM Plex Sans Thai fallback. Thai body and controls use IBM Plex Sans Thai. Small utility labels use DM Sans. Keep Thai line height generous enough for marks and mixed-script labels. Never rely on browser default control type.
