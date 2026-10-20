@@ -56,8 +56,9 @@ def feature_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def fit(rows: pd.DataFrame) -> XGBRegressor:
-    model = XGBRegressor(n_estimators=220, max_depth=6, learning_rate=.05, subsample=.85,
-                         colsample_bytree=.8, objective="reg:squarederror", n_jobs=2, random_state=42)
+    model = XGBRegressor(n_estimators=220, max_depth=3, learning_rate=.05, subsample=.85,
+                         colsample_bytree=.8, min_child_weight=5, reg_lambda=5,
+                         objective="count:poisson", n_jobs=2, random_state=42)
     model.fit(rows[FEATURES], rows.quantity_sold)
     return model
 
@@ -149,7 +150,7 @@ def train(records: list) -> dict:
         raise ValueError("ไม่มีช่วงข้อมูลรายวันต่อเนื่องเพียงพอสำหรับประเมินย้อนหลัง กรุณาตรวจวันที่ที่ขาด")
 
     backtests = [{"days": days, "folds": folds, **measure(buckets[days])} for days in HORIZONS]
-    metrics = {**measure(buckets[28]), "train_rows": len(eligible), "backtests": backtests,
+    metrics = {**measure(buckets[28]), "objective": "count:poisson", "train_rows": len(eligible), "backtests": backtests,
                "by_store": segment_scores(buckets[28], 3), "by_sku": segment_scores(buckets[28], 4)}
     model = fit(eligible)  # Historical evaluation is complete; now use all known dates.
     artifact_id = secrets.token_hex(16)

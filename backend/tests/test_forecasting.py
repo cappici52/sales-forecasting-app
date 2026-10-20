@@ -66,6 +66,7 @@ class ForecastingTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)), patch.object(forecasting, "fit", side_effect=tracked_fit):
             metrics = forecasting.train(records)
+            self.assertEqual(metrics["objective"], "count:poisson")
             self.assertEqual([item["days"] for item in metrics["backtests"]], [7, 14, 28])
             self.assertEqual([item["folds"] for item in metrics["backtests"]], [3, 3, 3])
             self.assertEqual(metrics["wape"], metrics["backtests"][-1]["wape"])
@@ -81,6 +82,12 @@ class ForecastingTests(unittest.TestCase):
             self.assertEqual(snapshots[0]["target_date"], date(2026, 5, 31))
             self.assertEqual({item["channel"] for item in snapshots}, {"in_store", "online"})
         self.assertEqual(fit_dates, [date(2026, 3, 7), date(2026, 4, 4), date(2026, 5, 2), date(2026, 5, 30)])
+
+    def test_poisson_fit_predicts_nonnegative_quantities(self):
+        rows = forecasting.feature_rows(forecasting.prepare(sales(days=90)))
+        model = forecasting.fit(rows)
+        self.assertEqual(model.get_params()["objective"], "count:poisson")
+        self.assertTrue((model.predict(rows[forecasting.FEATURES]) >= 0).all())
 
     def test_missing_price_is_rejected_and_zero_price_is_preserved(self):
         records = sales(days=90)
