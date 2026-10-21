@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { UiIcon } from "./UiIcon";
 import ForecastInsights from "./ForecastInsights";
 import SalesInsights from "./SalesInsights";
+import ProductExplorer from "./ProductExplorer";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 type User = { id: number; name: string; email: string; role: string; organization: string };
@@ -53,6 +54,7 @@ export default function ClientApp() {
   const [sku, setSku] = useState("");
   const [category, setCategory] = useState("");
   const [channel, setChannel] = useState("");
+  const [explorerSku, setExplorerSku] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -157,7 +159,7 @@ export default function ClientApp() {
           <Stat label={th ? "ยอดขายรวมในข้อมูล" : "Recorded revenue"} value={summary.record_count && summary.total_revenue != null ? money(summary.total_revenue) : "—"} detail={modelInvalid ? (th ? "บางแถวไม่มีราคา กรุณานำเข้าใหม่" : "Some rows lack prices; re-import data") : summary.latest_date ? `${th ? "ข้อมูลถึง" : "Through"} ${summary.latest_date}` : (th ? "ยังไม่มีข้อมูล" : "No data yet")} icon="฿"/>
           <Stat label={th ? "สาขา" : "Stores"} value={count(summary.store_count)} detail={th ? "ในชุดข้อมูลปัจจุบัน" : "In current dataset"} icon="▦"/>
           <Stat label={th ? "สินค้า / SKU" : "Products / SKUs"} value={count(summary.sku_count)} detail={th ? "ในชุดข้อมูลปัจจุบัน" : "In current dataset"} icon="◇"/>
-          <Stat label={th ? "คาดการณ์ 28 วัน" : "28-day forecast"} value={forecastReady ? money(totalForecast) : "—"} detail={forecastReady ? "XGBoost" : (th ? "เทรนโมเดลเพื่อดูผล" : "Train a model to see results")} icon="↗"/>
+          <Stat label={th ? `คาดการณ์ ${days} วัน` : `${days}-day forecast`} value={forecastReady ? money(totalForecast) : "—"} detail={forecastReady ? `${forecast.method === "weekly_naive" ? (th ? "ยอดขายสัปดาห์ก่อน" : "Previous-week baseline") : "XGBoost"}${store || sku || category || channel ? (th ? " · ตามตัวกรอง" : " · filtered") : ""}` : (th ? "เทรนโมเดลเพื่อดูผล" : "Train a model to see results")} icon="↗"/>
         </div>
         <div className="content-grid">
           <section className="surface chart-surface">
@@ -201,7 +203,8 @@ export default function ClientApp() {
           {forecastReady && forecast.coverage && forecast.coverage.series_used < forecast.coverage.series_total && <p className="model-warning" role="status">{th ? `พยากรณ์ได้ ${count(forecast.coverage.series_used)} จาก ${count(forecast.coverage.series_total)} ชุดสาขา/SKU/ช่องทาง; ชุดที่ข้อมูลล่าสุดไม่ครบ 28 วันไม่ถูกรวม` : `Forecast includes ${count(forecast.coverage.series_used)} of ${count(forecast.coverage.series_total)} store/SKU/channel series; series without 28 recent observed days are excluded.`}</p>}
           {chart.length ? <TrendChart data={chart}/>: <Empty title={modelInvalid ? (th ? "ข้อมูลราคายังไม่ครบ" : "Price data is incomplete") : summary.record_count ? (th ? "ไม่พบข้อมูลตามตัวกรอง" : "No data for these filters") : (th ? "ยังไม่มีข้อมูลยอดขาย" : "No sales data yet")} text={modelInvalid ? (th ? "นำเข้าไฟล์ที่มี unit_price ทุกแถว" : "Import a file with unit_price on every row.") : summary.record_count ? (th ? "ลองเลือกสาขา สินค้า หรือช่องทางอื่น" : "Try another store, SKU, or channel.") : (th ? "เริ่มจากนำเข้าข้อมูลยอดขายอย่างน้อย 90 วัน" : "Start by importing at least 90 days of sales.")} action={th ? "นำเข้าข้อมูล" : "Import data"} onAction={() => setView("import")}/>}
         </section>
-        <SalesInsights filters={{ store, sku, category, channel }} dataVersion={summary} lang={lang} onImport={() => setView("import")} onModel={() => setView("model")} onUnauthorized={handleUnauthorized}/>
+        <SalesInsights filters={{ store, sku, category, channel }} dataVersion={summary} lang={lang} onImport={() => setView("import")} onModel={() => setView("model")} onOpenProduct={setExplorerSku} onUnauthorized={handleUnauthorized}/>
+        <ProductExplorer filters={{ store, category, channel }} dataVersion={summary} lang={lang} modelReview={Boolean(needsReview)} selectedSku={explorerSku} onSelectSku={setExplorerSku} onUnauthorized={handleUnauthorized} onOpenForecast={selected => { setSku(selected); window.scrollTo({ top: 0, behavior: "smooth" }); }}/>
         <ForecastInsights items={forecast.items} filters={{ store, sku, category, channel }} lang={lang}/>
         {forecastReady && <section className="surface table-surface"><h2>{th ? "ผลรายวัน" : "Daily forecast"}</h2><div className="table-scroll"><table><thead><tr><th>{th ? "วันที่" : "Date"}</th><th>{th ? "ยอดขายคาดการณ์" : "Forecast revenue"}</th></tr></thead><tbody>{forecast.items.map(point => <tr key={point.date}><td>{point.date}</td><td>{money(point.forecast ?? 0)}</td></tr>)}</tbody></table></div></section>}
       </>}

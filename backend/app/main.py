@@ -140,6 +140,11 @@ def forecast(days: int = 28, store_id: str | None = None, sku_id: str | None = N
 @app.get("/api/v1/insights")
 def sales_insights(store_id: str | None = None, sku_id: str | None = None, category: str | None = None,
                    channel: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return _sales_insights(store_id, sku_id, category, channel, user, db)
+
+
+def _sales_insights(store_id: str | None, sku_id: str | None, category: str | None,
+                    channel: str | None, user: User, db: Session, product_limit: int | None = 8):
     all_rows = db.query(SalesRecord).filter_by(organization_id=user.organization_id).all()
     rows = [row for row in all_rows if (not store_id or row.store_id == store_id)
             and (not sku_id or row.sku_id == sku_id) and (not category or row.category == category)
@@ -151,7 +156,27 @@ def sales_insights(store_id: str | None = None, sku_id: str | None = None, categ
     price_complete = all(row.unit_price is not None for row in all_rows)
     projected = segment_forecasts(rows, artifact_id) if rows and artifact_id and price_complete else []
     return build_insights(rows, projected, today, review_needed=quality is not None and quality["status"] == "review",
-                          model_available=bool(artifact_id), price_complete=price_complete)
+                          model_available=bool(artifact_id), price_complete=price_complete, product_limit=product_limit)
+
+
+@app.get("/api/v1/products")
+def products(query: str = "", sort: str = "recent_revenue", page: int = 1, store_id: str | None = None,
+             category: str | None = None, channel: str | None = None,
+             user: User = Depends(current_user), db: Session = Depends(get_db)):
+    allowed = {"recent_revenue", "recent_units", "forecast_revenue", "change_pct", "name"}
+    if sort not in allowed or page < 1 or page > 100_000 or len(query) > 100:
+        raise HTTPException(422, "ตัวกรองรายการสินค้าไม่ถูกต้อง")
+    insights = _sales_insights(store_id, None, category, channel, user, db, product_limit=None)
+    matching = [item for item in insights["products"]
+                if query.casefold().strip() in f'{item["sku_id"]} {item["sku_name"] or ""}'.casefold()]
+    if sort == "name":
+        matching.sort(key=lambda item: ((item["sku_name"] or item["sku_id"]).casefold(), item["sku_id"]))
+    else:
+        matching.sort(key=lambda item: (item[sort] is not None, item[sort] or 0, item["sku_id"]), reverse=True)
+    page_size = 20
+    return {"as_of": insights["as_of"], "recent_start": insights.get("recent_start"),
+            "total": len(matching), "page": page, "page_size": page_size,
+            "items": matching[(page - 1) * page_size:page * page_size]}
 
 @app.get("/api/v1/reports/forecast-vs-actual")
 def forecast_vs_actual(grain: str = "week", run_id: int | None = None, store_id: str | None = None,

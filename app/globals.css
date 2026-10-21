@@ -363,6 +363,45 @@ tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 1100px) { .insight-grid { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .insight-heading { align-items: flex-start; flex-direction: column; gap: 4px; } .insight-table { margin-left: -3px; margin-right: -3px; } .insight-scroll-hint { display: block; } }
 
+.product-explorer { display: grid; gap: 15px; margin: 28px 0 17px; }
+.product-explorer > .section-heading h2 { margin: 4px 0; font-size: 21px; }
+.product-explorer > .section-heading .muted { font-size: 12px; }
+.product-workspace { min-height: 280px; scroll-margin-top: 90px; }
+.product-controls { display: flex; flex-wrap: wrap; gap: 13px; align-items: flex-end; }
+.product-controls label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.product-search { flex: 1 1 290px; }
+.product-search span { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 9px; background: var(--card); min-height: 43px; }
+.product-search span:focus-within { outline: 3px solid var(--ring); outline-offset: 2px; }
+.product-search input { min-width: 0; flex: 1; padding: 9px 12px; border: 0; background: transparent; color: var(--text); outline: 0; }
+.product-search input:focus-visible { outline: 0; }
+.product-search button { border: 0; background: transparent; color: var(--muted); min-width: 40px; min-height: 40px; font-size: 22px; }
+.product-controls select { min-height: 43px; min-width: 190px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--card); }
+.product-scope, .product-result-count, .product-chart-note { color: var(--muted); font-size: 12px; margin: 13px 0; }
+.product-state { min-height: 160px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); }
+.product-list { max-height: 520px; }
+.product-list table { min-width: 650px; font-variant-numeric: tabular-nums; }
+.product-list th:not(:first-child), .product-list td:not(:first-child) { text-align: right; }
+.product-list td small { display: block; color: var(--muted); font-size: 11px; font-weight: 500; }
+.product-open { display: grid; gap: 2px; text-align: left; color: var(--text); background: transparent; border: 0; padding: 3px 2px; }
+.product-open:hover strong { color: var(--primary); text-decoration: underline; }
+.product-open strong { overflow-wrap: anywhere; }
+.product-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 15px; color: var(--muted); font-size: 12px; }
+.product-pagination > div { display: flex; gap: 8px; }
+.product-pagination .secondary { min-height: 38px; padding: 7px 12px; }
+.product-back { margin: -4px 0 17px; }
+.product-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.product-detail-heading h3 { font: 700 clamp(22px,2.4vw,30px)/1.3 'Space Grotesk','IBM Plex Sans Thai',sans-serif; margin: 5px 0; overflow-wrap: anywhere; }
+.product-detail-heading .muted { font-size: 12px; }
+.product-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; margin-top: 20px; }
+.product-metrics > div { min-width: 0; background: var(--card); padding: 18px; display: grid; gap: 3px; }
+.product-metrics span, .product-metrics small { color: var(--muted); font-size: 11px; }
+.product-metrics strong { font: 700 clamp(19px,2vw,27px)/1.35 'Space Grotesk','IBM Plex Sans Thai',sans-serif; overflow-wrap: anywhere; }
+.product-evidence { border: 1px solid var(--border); background: var(--bg); border-radius: 9px; padding: 10px 13px; margin: 18px 0 3px; font-size: 12px; }
+.product-chart { height: 285px; min-width: 0; margin-top: 16px; }
+.product-daily { max-height: 300px; }
+.product-daily table { min-width: 340px; font-variant-numeric: tabular-nums; }
+@media(max-width:720px) { .product-controls label, .product-controls select { width: 100%; } .product-detail-heading { flex-direction: column; } .product-metrics { grid-template-columns: 1fr; } .product-pagination { flex-direction: column; align-items: stretch; } .product-pagination > div { justify-content: space-between; } .product-chart { height: 230px; } }
+
 /* Motion Reference adaptations: readable entrances, a one-time logo pop and restrained focus feedback. */
 .brandmark {
   background: #e9e6ff url('/cat-logo.png') center / 92% no-repeat;

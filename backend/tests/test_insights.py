@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import Base
 from app.insights import build_insights
-from app.main import sales_insights
+from app.main import products, sales_insights
 from app.models import Organization, SalesRecord, User
 
 
@@ -85,6 +85,30 @@ class InsightTests(unittest.TestCase):
             result = sales_insights(user=user, db=db)
             self.assertEqual([item["sku_id"] for item in result["products"]], ["OWN"])
             self.assertEqual([item["channel"] for item in result["channels"]], ["online"])
+            catalog = products(query="", sort="recent_units", page=1, user=user, db=db)
+            self.assertEqual([item["sku_id"] for item in catalog["items"]], ["OWN"])
+        engine.dispose()
+
+    def test_catalog_search_sort_and_page_keep_full_product_set(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            org = Organization(name="Catalog Org")
+            db.add(org); db.flush()
+            user = User(organization_id=org.id, email="catalog@example.test", display_name="Owner", password_hash="x", role="owner")
+            db.add(user)
+            for index in range(25):
+                db.add(SalesRecord(organization_id=org.id, date=date(2026, 1, 1), store_id="BKK",
+                                   sku_id=f"SKU{index:02d}", sku_name=f"Product {index:02d}",
+                                   category="Food", channel="online", quantity_sold=index + 1, unit_price=10))
+            db.commit()
+            first = products(query="product", sort="recent_units", page=1, user=user, db=db)
+            second = products(query="product", sort="recent_units", page=2, user=user, db=db)
+            self.assertEqual(first["total"], 25)
+            self.assertEqual(len(first["items"]), 20)
+            self.assertEqual(len(second["items"]), 5)
+            self.assertEqual(first["items"][0]["sku_id"], "SKU24")
+            self.assertEqual(products(query="sku03", sort="name", page=1, user=user, db=db)["items"][0]["sku_id"], "SKU03")
         engine.dispose()
 
 

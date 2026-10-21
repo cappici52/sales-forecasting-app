@@ -30,8 +30,9 @@ function actionText(action: Action, th: boolean) {
   }
 }
 
-export default function SalesInsights({ filters, dataVersion, lang, onImport, onModel, onUnauthorized }: {
-  filters: Filters; dataVersion: object; lang: "th" | "en"; onImport: () => void; onModel: () => void; onUnauthorized: () => void;
+export default function SalesInsights({ filters, dataVersion, lang, onImport, onModel, onOpenProduct, onUnauthorized }: {
+  filters: Filters; dataVersion: object; lang: "th" | "en"; onImport: () => void; onModel: () => void;
+  onOpenProduct: (sku: string) => void; onUnauthorized: () => void;
 }) {
   const [data, setData] = useState<Insights | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,7 +69,7 @@ export default function SalesInsights({ filters, dataVersion, lang, onImport, on
       : <>
         <div className="insight-grid">
           <section className="surface insight-product"><div className="section-heading"><div><p className="overline">SKU / 28 DAYS</p><h3>{th ? "รายสินค้าจากข้อมูลจริงและผลพยากรณ์" : "Actual and forecast by product"}</h3></div><span className="insight-count">{data.product_count} SKU</span></div>
-            <div className="table-scroll insight-table"><table><thead><tr><th>{th ? "สินค้า" : "Product"}</th><th>{th ? "ขายจริง" : "Actual units"}</th><th>{th ? "เทียบ 28 วันก่อน" : "Vs prior 28d"}</th><th>{th ? "พยากรณ์ชิ้น" : "Forecast units"}</th><th>{th ? "พยากรณ์รายได้" : "Forecast revenue"}</th></tr></thead><tbody>{data.products.map(item => <tr key={item.sku_id}><td><strong>{item.sku_name || item.sku_id}</strong>{item.sku_name && <small>{item.sku_id}</small>}</td><td>{number(item.recent_units, lang)}</td><td>{item.change_pct == null ? <span className="muted" title={th ? "ข้อมูลรายวันไม่ครบหรือยอดช่วงก่อนเป็นศูนย์" : "Missing daily history or zero prior units"}>—</span> : <span className={item.change_pct < 0 ? "insight-down" : "insight-up"}>{item.change_pct >= 0 ? "+" : ""}{(item.change_pct * 100).toFixed(0)}%</span>}</td><td>{item.forecast_units == null ? "—" : number(item.forecast_units, lang)}</td><td>{item.forecast_revenue == null ? "—" : money(item.forecast_revenue, lang)}</td></tr>)}</tbody></table></div>
+            <div className="table-scroll insight-table"><table><thead><tr><th>{th ? "สินค้า" : "Product"}</th><th>{th ? "ขายจริง" : "Actual units"}</th><th>{th ? "เทียบ 28 วันก่อน" : "Vs prior 28d"}</th><th>{th ? "พยากรณ์ชิ้น" : "Forecast units"}</th><th>{th ? "พยากรณ์รายได้" : "Forecast revenue"}</th></tr></thead><tbody>{data.products.map(item => <tr key={item.sku_id}><td><button className="product-open" type="button" onClick={() => onOpenProduct(item.sku_id)}><strong>{item.sku_name || item.sku_id}</strong>{item.sku_name && <small>{item.sku_id}</small>}</button></td><td>{number(item.recent_units, lang)}</td><td>{item.change_pct == null ? <span className="muted" title={th ? "ข้อมูลรายวันไม่ครบหรือยอดช่วงก่อนเป็นศูนย์" : "Missing daily history or zero prior units"}>—</span> : <span className={item.change_pct < 0 ? "insight-down" : "insight-up"}>{item.change_pct >= 0 ? "+" : ""}{(item.change_pct * 100).toFixed(0)}%</span>}</td><td>{item.forecast_units == null ? "—" : number(item.forecast_units, lang)}</td><td>{item.forecast_revenue == null ? "—" : money(item.forecast_revenue, lang)}</td></tr>)}</tbody></table></div>
             <p className="insight-scroll-hint">{th ? "เลื่อนตารางไปทางขวาเพื่อดูคอลัมน์เพิ่มเติม →" : "Scroll the table right for more columns →"}</p>
             <p className="insight-caption">{th ? `แสดงสูงสุด 8 จาก ${data.product_count} SKU · พยากรณ์ครอบคลุม ${data.forecast_coverage.series_used}/${data.forecast_coverage.series_total} ชุดสาขา/SKU/ช่องทาง · “—” หมายถึงข้อมูลไม่ครบหรือยอดช่วงก่อนเป็นศูนย์` : `Top 8 of ${data.product_count} SKUs · forecast covers ${data.forecast_coverage.series_used}/${data.forecast_coverage.series_total} store/SKU/channel series · “—” means incomplete data or zero prior units`}</p>
           </section>

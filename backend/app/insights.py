@@ -4,7 +4,8 @@ from datetime import date, timedelta
 
 
 def build_insights(records: list, projected: list[dict], today: date, review_needed: bool,
-                   model_available: bool = False, price_complete: bool = True) -> dict:
+                   model_available: bool = False, price_complete: bool = True,
+                   product_limit: int | None = 8) -> dict:
     if not records:
         return {"as_of": None, "products": [], "product_count": 0, "channels": [], "channel_count": 0,
                 "weekday": {"status": "no_data", "values": []},
@@ -26,17 +27,19 @@ def build_insights(records: list, projected: list[dict], today: date, review_nee
         key = (row.store_id, row.sku_id, row.channel)
         product_series[row.sku_id].add(key)
         channel_series[row.channel].add(key)
+        product = products.setdefault(row.sku_id, {"sku_id": row.sku_id, "sku_name": None,
+                                                    "category": None, "recent_units": 0.0, "previous_units": 0.0,
+                                                    "recent_revenue": 0.0, "forecast_units": None,
+                                                    "forecast_revenue": None})
+        if getattr(row, "sku_name", None):
+            product["sku_name"] = row.sku_name
+        if getattr(row, "category", None):
+            product["category"] = row.category
         if row.date < previous_start or row.date > as_of:
             continue
         series_days[key].add(row.date)
-        product = products.setdefault(row.sku_id, {"sku_id": row.sku_id, "sku_name": None,
-                                                    "recent_units": 0.0, "previous_units": 0.0,
-                                                    "recent_revenue": 0.0, "forecast_units": None,
-                                                    "forecast_revenue": None})
         channel = channels.setdefault(row.channel, {"channel": row.channel, "recent_revenue": 0.0,
                                                      "forecast_revenue": None})
-        if getattr(row, "sku_name", None):
-            product["sku_name"] = row.sku_name
         if row.unit_price is None:
             missing_price = True
             revenue = 0.0
@@ -131,7 +134,7 @@ def build_insights(records: list, projected: list[dict], today: date, review_nee
         actions.append({"kind": "train_model"})
 
     return {"as_of": as_of.isoformat(), "recent_start": recent_start.isoformat(),
-            "previous_start": previous_start.isoformat(), "products": product_rows[:8], "product_count": len(product_rows),
+            "previous_start": previous_start.isoformat(), "products": product_rows[:product_limit], "product_count": len(product_rows),
             "channels": channel_rows[:8], "channel_count": len(channel_rows),
             "weekday": weekday, "forecast_coverage": {"series_used": len(projected_keys),
                                                       "series_total": len(all_series)},
