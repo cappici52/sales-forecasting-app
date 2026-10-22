@@ -14,3 +14,11 @@ backend/artifacts/
 coverage/
 artifacts/
 work/
+outputs/bulk_orders_2026-10-22/
+outputs/weekly_direct_2026-10-22/
+outputs/weekly_revenue_2026-10-22/
+outputs/annual_forecast_2026-10-22/
+outputs/m5_benchmark_2026-10-22/
+outputs/m5_robustness_2026-10-22/
+outputs/m5_routing_2026-10-22/
+outputs/public_olist_2026-10-21/
