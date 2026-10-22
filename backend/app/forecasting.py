@@ -55,11 +55,16 @@ def feature_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.dropna(subset=FEATURES + ["quantity_sold"])
 
 
-def fit(rows: pd.DataFrame) -> XGBRegressor:
+def fit(rows: pd.DataFrame, price_weighted: bool = False, absolute_error: bool = False) -> XGBRegressor:
     model = XGBRegressor(n_estimators=220, max_depth=3, learning_rate=.05, subsample=.85,
                          colsample_bytree=.8, min_child_weight=5, reg_lambda=5,
-                         objective="count:poisson", n_jobs=2, random_state=42)
-    model.fit(rows[FEATURES], rows.quantity_sold)
+                         objective="reg:absoluteerror" if absolute_error else "count:poisson", n_jobs=2, random_state=42)
+    if price_weighted:
+        prices = rows.unit_price.to_numpy(dtype=float)
+        weights = prices / prices.mean() if prices.mean() > 0 else np.ones(len(rows))
+        model.fit(rows[FEATURES], rows.quantity_sold, sample_weight=weights)
+    else:
+        model.fit(rows[FEATURES], rows.quantity_sold)
     return model
 
 
@@ -115,19 +120,74 @@ def segment_scores(rows: list[tuple], index: int) -> list[dict]:
 
 
 def choose_method(result: dict) -> str:
-    """Use the weekly benchmark when the model fails to beat it on rolling origins."""
+    """Choose the lowest rolling revenue WAPE; keep the simpler method on ties."""
     model_error = result.get("wape")
     baseline_error = result.get("baseline_wape")
+    weighted_error = result.get("weighted_wape")
+    absolute_error = result.get("absolute_wape")
+    existing = [value for value in (model_error, baseline_error, weighted_error) if value is not None]
+    if absolute_error is not None and existing and absolute_error < min(existing):
+        return "absolute_error_xgboost"
+    if (weighted_error is not None and model_error is not None and baseline_error is not None
+            and weighted_error < min(model_error, baseline_error)):
+        return "price_weighted_xgboost"
     if model_error is not None and baseline_error is not None and model_error >= baseline_error:
         return "weekly_naive"
     return "xgboost"
 
 
-def load_artifact(artifact_id: str) -> tuple[XGBRegressor, dict[int, str]]:
+def load_artifact(artifact_id: str) -> tuple[XGBRegressor, dict[int, str], XGBRegressor | None, XGBRegressor | None]:
     artifact = joblib.load(artifact_path(artifact_id))
+    if isinstance(artifact, dict) and artifact.get("version") == 4:
+        return artifact["model"], artifact["methods"], artifact["weighted_model"], artifact["absolute_model"]
+    if isinstance(artifact, dict) and artifact.get("version") == 3:
+        return artifact["model"], artifact["methods"], artifact["weighted_model"], None
     if isinstance(artifact, dict) and artifact.get("version") == 2:
-        return artifact["model"], artifact["methods"]
-    return artifact, {}  # Existing model-only artifacts remain usable.
+        return artifact["model"], artifact["methods"], None, None
+    return artifact, {}, None, None  # Existing model-only artifacts remain usable.
+
+
+def selected_model(artifact_id: str, days: int) -> tuple[XGBRegressor, str]:
+    model, methods, weighted, absolute = load_artifact(artifact_id)
+    method = methods.get(days, "xgboost")
+    if method == "price_weighted_xgboost" and weighted is not None:
+        model = weighted
+    elif method == "absolute_error_xgboost" and absolute is not None:
+        model = absolute
+    return model, method
+
+
+def candidate_scores(rows: list[tuple]) -> dict:
+    """Rows contain actual, Poisson, baseline, weighted, store, SKU, absolute."""
+    return {**measure(rows),
+            "weighted_wape": measure([(row[0], row[3], row[2]) for row in rows])["wape"],
+            "absolute_wape": measure([(row[0], row[6], row[2]) for row in rows])["wape"]}
+
+
+def confirm_method(validation: dict, confirmation: dict | None) -> tuple[str, dict]:
+    """Promote a weighted objective only if it wins earlier AND latest windows.
+
+    The latest window is a promotion check, not an untouched accuracy estimate.
+    Without a separate window, retain Poisson or the weekly baseline.
+    """
+    incumbent = choose_method({key: value for key, value in validation.items()
+                               if key not in {"absolute_wape", "weighted_wape"}})
+    candidate = choose_method(validation)
+    promoted = False
+    incumbent_key = {"xgboost": "wape", "weekly_naive": "baseline_wape",
+                     "price_weighted_xgboost": "weighted_wape"}[incumbent]
+    challenger_key = {"absolute_error_xgboost": "absolute_wape", "price_weighted_xgboost": "weighted_wape"}.get(candidate)
+    if challenger_key and confirmation:
+        challenger_error = confirmation.get(challenger_key)
+        incumbent_error = confirmation.get(incumbent_key)
+        promoted = (challenger_error is not None and incumbent_error is not None
+                    and challenger_error < incumbent_error)
+    return (candidate if promoted else incumbent), {
+        "incumbent": incumbent, "candidate": candidate, "promoted": promoted,
+        "confirmation_available": confirmation is not None,
+        "incumbent_wape": confirmation.get(incumbent_key) if confirmation else None,
+        "challenger_wape": confirmation.get(challenger_key) if confirmation and challenger_key else None,
+    }
 
 def train(records: list) -> dict:
     frame = prepare(records)
@@ -140,42 +200,81 @@ def train(records: list) -> dict:
     end = frame.date.max()
     actual = {(row.store_id, row.sku_id, row.channel, row.date): row for row in frame.itertuples() if pd.notna(row.quantity_sold)}
     buckets = {days: [] for days in HORIZONS}
+    confirmation = {days: [] for days in HORIZONS}
     folds = 0
-    for fold in (3, 2, 1):
+    validation_origins = []
+    for fold in (4, 3, 2, 1):
         origin = end - pd.Timedelta(days=28 * fold)
         training = eligible[eligible.date <= origin]
         if len(training) < 30 or training.date.nunique() < 28:
             continue
         model = fit(training)
+        weighted_model = fit(training, price_weighted=True)
+        absolute_model = fit(training, price_weighted=True, absolute_error=True)
         projections = forecast_series(frame, model, origin, 28)
+        weighted_projections = forecast_series(frame, weighted_model, origin, 28)
+        absolute_projections = forecast_series(frame, absolute_model, origin, 28)
         valid = []
         for key, (predicted, baseline, price) in projections.items():
+            weighted = weighted_projections.get(key)
+            if weighted is None:
+                continue
             future = [actual.get((*key, origin + pd.Timedelta(days=offset))) for offset in range(1, 29)]
             if any(row is None for row in future):
                 continue
             for offset, row in enumerate(future):
                 valid.append((offset, float(row.quantity_sold * row.unit_price), predicted[offset] * price,
-                              baseline[offset] * price, key[0], key[1]))
+                              baseline[offset] * price, weighted[0][offset] * price, key[0], key[1],
+                              absolute_projections[key][0][offset] * price))
         if not valid:
             continue
-        folds += 1
+        if fold != 1:
+            folds += 1
+            validation_origins.append(str(origin.date()))
         for days in HORIZONS:
-            buckets[days].extend((actual_value, prediction, naive, store, sku)
-                                  for offset, actual_value, prediction, naive, store, sku in valid if offset < days)
-    if not folds:
+            (confirmation if fold == 1 else buckets)[days].extend(row[1:] for row in valid if row[0] < days)
+    if not folds and not confirmation[28]:
         raise ValueError("ไม่มีช่วงข้อมูลรายวันต่อเนื่องเพียงพอสำหรับประเมินย้อนหลัง กรุณาตรวจวันที่ที่ขาด")
+    independent_confirmation = bool(folds and confirmation[28])
+    if not folds:
+        # Short histories support Poisson/baseline selection, but cannot promote a challenger.
+        buckets = confirmation
+        folds = 1
+        validation_origins = [str((end - pd.Timedelta(days=28)).date())]
 
-    backtests = [{"days": days, "folds": folds, **measure(buckets[days])} for days in HORIZONS]
-    methods = {item["days"]: choose_method(item) for item in backtests}
+    backtests = [{"days": days, "folds": folds, **candidate_scores(buckets[days])}
+                 for days in HORIZONS]
+    methods = {}
     for item in backtests:
-        item["selected_method"] = methods[item["days"]]
+        days = item["days"]
+        check = candidate_scores(confirmation[days]) if independent_confirmation else None
+        methods[days], item["promotion_check"] = confirm_method(item, check)
+        item["selected_method"] = methods[days]
+        item["selected_wape"] = {"xgboost": item["wape"], "weekly_naive": item["baseline_wape"],
+                                 "price_weighted_xgboost": item["weighted_wape"],
+                                 "absolute_error_xgboost": item["absolute_wape"]}[methods[item["days"]]]
+        if check:
+            score_key = {"xgboost": "wape", "weekly_naive": "baseline_wape",
+                         "price_weighted_xgboost": "weighted_wape", "absolute_error_xgboost": "absolute_wape"}[methods[days]]
+            item["confirmation_wape"] = check[score_key]
+            item["confirmation_baseline_wape"] = check["baseline_wape"]
+    selected_index = {"xgboost": 1, "weekly_naive": 2, "price_weighted_xgboost": 3,
+                      "absolute_error_xgboost": 6}[methods[28]]
+    selected_rows = [(row[0], row[selected_index], row[2], row[4], row[5]) for row in buckets[28]]
     metrics = {**measure(buckets[28]), "objective": "count:poisson", "train_rows": len(eligible), "backtests": backtests,
-               "by_store": segment_scores(buckets[28], 3), "by_sku": segment_scores(buckets[28], 4),
+               "selection_origins": validation_origins,
+               "confirmation_origin": str((end - pd.Timedelta(days=28)).date()) if independent_confirmation else None,
+               "evaluation_note": "Rolling scores select candidates; the latest window gates promotion and is not an untouched test.",
+               "selected_metrics": measure(selected_rows),
+               "by_store": segment_scores(selected_rows, 3), "by_sku": segment_scores(selected_rows, 4),
                "forecast_methods": {str(days): methods[days] for days in HORIZONS}}
     model = fit(eligible)  # Historical evaluation is complete; now use all known dates.
+    weighted_model = fit(eligible, price_weighted=True)
+    absolute_model = fit(eligible, price_weighted=True, absolute_error=True)
     artifact_id = secrets.token_hex(16)
     ARTIFACTS.mkdir(exist_ok=True)
-    joblib.dump({"version": 2, "model": model, "methods": methods}, artifact_path(artifact_id))
+    joblib.dump({"version": 4, "model": model, "weighted_model": weighted_model, "absolute_model": absolute_model,
+                 "methods": methods}, artifact_path(artifact_id))
     metrics["_artifact_id"] = artifact_id
     return metrics
 
@@ -183,14 +282,13 @@ def predict(records: list, artifact_id: str, days: int) -> dict:
     path = artifact_path(artifact_id)
     if not path.exists():
         return {"items": [], "coverage": {"series_used": 0, "series_total": 0}}
-    model, methods = load_artifact(artifact_id)
+    chosen_model, method = selected_model(artifact_id, days)
     frame = prepare(records)
     if frame.empty:
         return {"items": [], "coverage": {"series_used": 0, "series_total": 0}}
     origin = frame.date.max()
     total: dict[pd.Timestamp, float] = {}
-    projections = forecast_series(frame, model, origin, days)
-    method = methods.get(days, "xgboost")
+    projections = forecast_series(frame, chosen_model, origin, days)
     for predicted, baseline, price in projections.values():
         for offset, quantity in enumerate(baseline if method == "weekly_naive" else predicted, start=1):
             day = origin + pd.Timedelta(days=offset)
@@ -210,9 +308,8 @@ def segment_forecasts(records: list, artifact_id: str, days: int = 28) -> list[d
     frame = prepare(records)
     if frame.empty:
         return []
-    model, methods = load_artifact(artifact_id)
-    projections = forecast_series(frame, model, frame.date.max(), days)
-    method = methods.get(days, "xgboost")
+    chosen_model, method = selected_model(artifact_id, days)
+    projections = forecast_series(frame, chosen_model, frame.date.max(), days)
     return [{
         "store_id": key[0], "sku_id": key[1], "channel": key[2],
         "forecast_units": round(float(sum(baseline if method == "weekly_naive" else predicted)), 2),
@@ -225,9 +322,8 @@ def snapshot_predictions(records: list, artifact_id: str) -> list[dict]:
     if frame.empty:
         return []
     origin = frame.date.max()
-    model, methods = load_artifact(artifact_id)
-    projections = forecast_series(frame, model, origin, 28)
-    method = methods.get(28, "xgboost")
+    chosen_model, method = selected_model(artifact_id, 28)
+    projections = forecast_series(frame, chosen_model, origin, 28)
     categories = {(r.store_id, r.sku_id, r.channel): getattr(r, "category", None) for r in records}
     return [{
         "origin_date": origin.date(), "target_date": (origin + pd.Timedelta(days=offset)).date(),

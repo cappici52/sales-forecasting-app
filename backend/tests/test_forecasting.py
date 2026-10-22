@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
+import numpy as np
 from fastapi import HTTPException, UploadFile
 
 from app import forecasting
@@ -31,8 +32,11 @@ def sales(days=150, missing=None):
 
 
 class ConstantModel:
+    def __init__(self, value=5.0):
+        self.value = value
+
     def predict(self, features):
-        return [5.0]
+        return [self.value]
 
 
 class ForecastingTests(unittest.TestCase):
@@ -60,15 +64,17 @@ class ForecastingTests(unittest.TestCase):
         fit_dates = []
         original_fit = forecasting.fit
 
-        def tracked_fit(rows):
+        def tracked_fit(rows, price_weighted=False, absolute_error=False):
             fit_dates.append(rows.date.max().date())
-            return original_fit(rows)
+            return original_fit(rows, price_weighted=price_weighted, absolute_error=absolute_error)
 
         with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)), patch.object(forecasting, "fit", side_effect=tracked_fit):
             metrics = forecasting.train(records)
             self.assertEqual(metrics["objective"], "count:poisson")
             self.assertEqual([item["days"] for item in metrics["backtests"]], [7, 14, 28])
-            self.assertEqual([item["folds"] for item in metrics["backtests"]], [3, 3, 3])
+            self.assertEqual([item["folds"] for item in metrics["backtests"]], [2, 2, 2])
+            self.assertEqual(metrics["confirmation_origin"], "2026-05-02")
+            self.assertTrue(all(origin < metrics["confirmation_origin"] for origin in metrics["selection_origins"]))
             self.assertEqual(metrics["wape"], metrics["backtests"][-1]["wape"])
             self.assertEqual(metrics["by_store"][0]["id"], "BKK01")
             self.assertEqual(metrics["by_sku"][0]["id"], "SKU01")
@@ -85,13 +91,25 @@ class ForecastingTests(unittest.TestCase):
             self.assertEqual(len(snapshots), 56)
             self.assertEqual(snapshots[0]["target_date"], date(2026, 5, 31))
             self.assertEqual({item["channel"] for item in snapshots}, {"in_store", "online"})
-        self.assertEqual(fit_dates, [date(2026, 3, 7), date(2026, 4, 4), date(2026, 5, 2), date(2026, 5, 30)])
+        self.assertEqual(fit_dates, [day for day in (date(2026, 3, 7), date(2026, 4, 4),
+                                                    date(2026, 5, 2), date(2026, 5, 30)) for _ in range(3)])
 
     def test_poisson_fit_predicts_nonnegative_quantities(self):
         rows = forecasting.feature_rows(forecasting.prepare(sales(days=90)))
         model = forecasting.fit(rows)
         self.assertEqual(model.get_params()["objective"], "count:poisson")
         self.assertTrue((model.predict(rows[forecasting.FEATURES]) >= 0).all())
+
+    def test_price_weighted_fit_gives_high_price_rows_more_weight(self):
+        rows = forecasting.feature_rows(forecasting.prepare(sales(days=90)))
+        with patch.object(forecasting, "XGBRegressor") as regressor:
+            forecasting.fit(rows)
+            self.assertNotIn("sample_weight", regressor.return_value.fit.call_args.kwargs)
+            forecasting.fit(rows, price_weighted=True)
+            weights = regressor.return_value.fit.call_args.kwargs["sample_weight"]
+        self.assertAlmostEqual(float(np.mean(weights)), 1)
+        self.assertGreater(float(weights[rows.channel.eq("online").to_numpy()].mean()),
+                           float(weights[rows.channel.eq("in_store").to_numpy()].mean()))
 
     def test_weak_model_uses_weekly_baseline_for_forecast_and_snapshot(self):
         records = sales()
@@ -116,12 +134,38 @@ class ForecastingTests(unittest.TestCase):
     def test_old_artifact_stays_compatible_and_tie_uses_baseline(self):
         self.assertEqual(forecasting.choose_method({"wape": 0.4, "baseline_wape": 0.4}), "weekly_naive")
         self.assertEqual(forecasting.choose_method({"wape": 0.3, "baseline_wape": 0.4}), "xgboost")
+        self.assertEqual(forecasting.choose_method({"wape": 0.3, "baseline_wape": 0.4,
+                                                   "weighted_wape": 0.2}), "price_weighted_xgboost")
         with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)):
             artifact_id = "a" * 32
             forecasting.joblib.dump(ConstantModel(), forecasting.artifact_path(artifact_id))
-            model, methods = forecasting.load_artifact(artifact_id)
+            model, methods, weighted_model, absolute_model = forecasting.load_artifact(artifact_id)
             self.assertIsInstance(model, ConstantModel)
             self.assertEqual(methods, {})
+            self.assertIsNone(weighted_model)
+            self.assertIsNone(absolute_model)
+            forecasting.joblib.dump({"version": 2, "model": ConstantModel(),
+                                     "methods": {28: "weekly_naive"}},
+                                    forecasting.artifact_path(artifact_id))
+            _, methods, weighted_model, _ = forecasting.load_artifact(artifact_id)
+            self.assertEqual(methods, {28: "weekly_naive"})
+            self.assertIsNone(weighted_model)
+
+    def test_weighted_artifact_drives_forecast_segments_and_snapshot(self):
+        records = sales()
+        with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)):
+            artifact_id = "b" * 32
+            forecasting.joblib.dump({"version": 3, "model": ConstantModel(),
+                                     "weighted_model": ConstantModel(10),
+                                     "methods": {28: "price_weighted_xgboost"}},
+                                    forecasting.artifact_path(artifact_id))
+            forecast = forecasting.predict(records, artifact_id, 28)
+            self.assertEqual(forecast["method"], "price_weighted_xgboost")
+            self.assertEqual(forecast["items"][0]["forecast"], 300)
+            self.assertEqual(sum(item["forecast_revenue"] for item in forecasting.segment_forecasts(records, artifact_id)),
+                             sum(item["forecast"] for item in forecast["items"]))
+            self.assertEqual(sum(item["forecast_revenue"] for item in forecasting.snapshot_predictions(records, artifact_id)),
+                             sum(item["forecast"] for item in forecast["items"]))
 
     def test_missing_price_is_rejected_and_zero_price_is_preserved(self):
         records = sales(days=90)
@@ -152,9 +196,52 @@ class ForecastingTests(unittest.TestCase):
             ) for row in csv.DictReader(source)]
         with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)):
             metrics = forecasting.train(records)
-            self.assertEqual(metrics["backtests"][-1]["folds"], 3)
+            self.assertEqual(metrics["backtests"][-1]["folds"], 2)
             self.assertEqual(len(metrics["by_store"]), 2)
             self.assertEqual(len(metrics["by_sku"]), 4)
+
+    def test_challenger_requires_earlier_and_latest_window_improvement(self):
+        earlier = {"wape": .6, "baseline_wape": .8, "weighted_wape": .7, "absolute_wape": .5}
+        method, check = forecasting.confirm_method(earlier, {"wape": .4, "absolute_wape": .55})
+        self.assertEqual(method, "xgboost")
+        self.assertFalse(check["promoted"])
+        self.assertEqual(forecasting.confirm_method(earlier, {"wape": .4, "absolute_wape": .3})[0],
+                         "absolute_error_xgboost")
+        self.assertEqual(forecasting.confirm_method(earlier, None)[0], "xgboost")
+        self.assertEqual(forecasting.confirm_method(earlier, {"wape": .4, "absolute_wape": .4})[0], "xgboost")
+        self.assertEqual(forecasting.confirm_method({**earlier, "absolute_wape": .9},
+                                                   {"wape": .4, "absolute_wape": .1})[0], "xgboost")
+        weighted = {**earlier, "absolute_wape": .9, "weighted_wape": .3}
+        self.assertEqual(forecasting.confirm_method(weighted, {"wape": .4, "weighted_wape": .5})[0], "xgboost")
+        self.assertEqual(forecasting.confirm_method(weighted, {"wape": .4, "weighted_wape": .3})[0], "price_weighted_xgboost")
+
+    def test_absolute_model_is_used_consistently_and_clamps_negative_units(self):
+        records = sales()
+        with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)):
+            artifact_id = "c" * 32
+            for value in (-3, 12):
+                forecasting.joblib.dump({"version": 4, "model": ConstantModel(),
+                                         "weighted_model": ConstantModel(8), "absolute_model": ConstantModel(value),
+                                         "methods": {28: "absolute_error_xgboost"}}, forecasting.artifact_path(artifact_id))
+                result = forecasting.predict(records, artifact_id, 28)
+                expected = max(0, value) * 30 * 28
+                self.assertEqual(result["method"], "absolute_error_xgboost")
+                self.assertEqual(sum(row["forecast"] for row in result["items"]), expected)
+                self.assertEqual(sum(row["forecast_revenue"] for row in forecasting.segment_forecasts(records, artifact_id)), expected)
+                self.assertEqual(sum(row["forecast_revenue"] for row in forecasting.snapshot_predictions(records, artifact_id)), expected)
+
+    def test_short_history_cannot_promote_without_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(forecasting, "ARTIFACTS", Path(directory)), patch.object(forecasting, "fit", return_value=ConstantModel()):
+            metrics = forecasting.train(sales(days=90))
+        self.assertIsNone(metrics["confirmation_origin"])
+        self.assertTrue(all(not item["promotion_check"]["promoted"] for item in metrics["backtests"]))
+
+    def test_absolute_objective_uses_price_weights(self):
+        rows = forecasting.feature_rows(forecasting.prepare(sales(days=90)))
+        with patch.object(forecasting, "XGBRegressor") as regressor:
+            forecasting.fit(rows, price_weighted=True, absolute_error=True)
+        self.assertEqual(regressor.call_args.kwargs["objective"], "reg:absoluteerror")
+        self.assertAlmostEqual(float(np.mean(regressor.return_value.fit.call_args.kwargs["sample_weight"])), 1)
 
 
 if __name__ == "__main__":

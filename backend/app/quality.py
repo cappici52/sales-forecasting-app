@@ -20,18 +20,25 @@ def assess(metrics: dict, records: list, today: date) -> dict:
     covered = sum(len(recent[key]) == 28 for key in series)
 
     result = next((item for item in metrics.get("backtests", []) if item.get("days") == 28), None)
+    error = result.get("selected_wape", result.get("wape")) if result else None
+    baseline_error = result.get("baseline_wape") if result else None
+    # Use the selected method's earlier score; the promotion window is also checked
+    # so a recent regression is not hidden by averaging older windows.
+    confirmation_error = result.get("confirmation_wape") if result else None
+    confirmation_baseline = result.get("confirmation_baseline_wape") if result else None
     reasons = []
-    if (not result or not isinstance(result.get("wape"), (int, float))
-            or not isinstance(result.get("baseline_wape"), (int, float))
-            or not isfinite(result["wape"]) or not isfinite(result["baseline_wape"])
+    if (not result or not isinstance(error, (int, float))
+            or not isinstance(baseline_error, (int, float))
+            or not isfinite(error) or not isfinite(baseline_error)
             or not result.get("test_rows")):
         reasons.append("missing_backtest")
     else:
         if result.get("folds", 0) < EXPECTED_FOLDS:
             reasons.append("limited_backtest")
-        if result["wape"] >= result["baseline_wape"]:
+        if error >= baseline_error or (confirmation_error is not None and confirmation_baseline is not None
+                                       and confirmation_error >= confirmation_baseline):
             reasons.append("not_better_than_baseline")
-        if result["wape"] >= MAX_REVENUE_WAPE:
+        if error >= MAX_REVENUE_WAPE or (confirmation_error is not None and confirmation_error >= MAX_REVENUE_WAPE):
             reasons.append("high_revenue_error")
     if age > MAX_DATA_AGE_DAYS:
         reasons.append("stale_data")

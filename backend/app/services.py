@@ -12,10 +12,14 @@ async def read_and_validate(file: UploadFile) -> pd.DataFrame:
     if not file.filename or not file.filename.lower().endswith((".csv", ".xlsx")):
         raise HTTPException(422, "รองรับเฉพาะไฟล์ CSV หรือ XLSX")
     raw = await file.read(20_000_001)
+    return validate_content(raw, file.filename)
+
+
+def validate_content(raw: bytes, filename: str) -> pd.DataFrame:
     if not raw or len(raw) > 20_000_000:
         raise HTTPException(413, "ไฟล์ต้องมีขนาดไม่เกิน 20 MB")
     try:
-        frame = pd.read_excel(io.BytesIO(raw)) if file.filename.lower().endswith(".xlsx") else pd.read_csv(io.BytesIO(raw))
+        frame = pd.read_excel(io.BytesIO(raw)) if filename.lower().endswith(".xlsx") else pd.read_csv(io.BytesIO(raw))
     except Exception as exc:
         raise HTTPException(422, "อ่านไฟล์ไม่สำเร็จ: รองรับ CSV และ XLSX") from exc
     frame.columns = [str(c).strip().lower().replace(" ", "_") for c in frame.columns]

@@ -39,6 +39,15 @@ class QualityTests(unittest.TestCase):
                                    "wape": float("nan"), "baseline_wape": 0.2}]}
         self.assertEqual(assess(invalid, records(), date(2026, 9, 28))["reasons"], ["missing_backtest"])
 
+    def test_quality_checks_selected_method_and_latest_confirmation(self):
+        item = {"days": 28, "folds": 3, "test_rows": 168, "wape": .6,
+                "selected_wape": .2, "baseline_wape": .4, "confirmation_wape": .25,
+                "confirmation_baseline_wape": .4}
+        self.assertEqual(assess({"backtests": [item]}, records(), date(2026, 9, 28))["reasons"], [])
+        item["confirmation_wape"] = .5
+        self.assertEqual(assess({"backtests": [item]}, records(), date(2026, 9, 28))["reasons"],
+                         ["not_better_than_baseline", "high_revenue_error"])
+
 
 if __name__ == "__main__":
     unittest.main()

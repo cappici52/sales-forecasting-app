@@ -264,7 +264,7 @@ async def import_upload(request: Request, file: UploadFile = File(...), user: Us
 @app.post("/api/v1/models/train")
 def train(request: Request, user: User = Depends(writable_user), db: Session = Depends(get_db)):
     check_origin(request)
-    run = ModelRun(organization_id=user.organization_id, model_name="XGBoost (Poisson)", status="running")
+    run = ModelRun(organization_id=user.organization_id, model_name="XGBoost (validated selection)", status="running")
     db.add(run); db.commit(); db.refresh(run)
     records = db.query(SalesRecord).filter_by(organization_id=user.organization_id).all()
     if not records:
