@@ -1,10 +1,17 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
+from app import forecasting
 from scripts import benchmark_olist
+
+
+class FixedModel:
+    def predict(self, features):
+        return [8.0]
 
 
 class OlistBenchmarkTests(unittest.TestCase):
@@ -38,6 +45,17 @@ class OlistBenchmarkTests(unittest.TestCase):
         self.assertEqual(absent.quantity_sold, 0)
         self.assertEqual(absent.unit_price, 1)
         self.assertEqual(benchmark_olist.wape([(10, 8, 100, 80)], 0, 1), 0.2)
+
+    def test_price_diagnostics_separate_known_future_price_and_units(self):
+        dates = pd.date_range("2026-01-01", periods=68)
+        frame = pd.DataFrame({
+            "date": dates, "store_id": "one", "sku_id": "product", "channel": "online",
+            "quantity_sold": 10.0, "unit_price": [100.0] * 40 + [150.0] * 28,
+        })
+        with patch.object(forecasting, "fit", return_value=FixedModel()):
+            rows = benchmark_olist.evaluate(frame, dates[39], "poisson_xgb")
+        self.assertEqual(len(rows), 28)
+        self.assertEqual(rows[0], (10.0, 8.0, 1500.0, 800.0, 1200.0, 1000.0))
 
 
 if __name__ == "__main__":

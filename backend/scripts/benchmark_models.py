@@ -16,9 +16,9 @@ from app.database import SessionLocal
 from app.models import SalesRecord
 
 
-def score(rows: list[tuple[float, float]]) -> float:
-    actual = np.array([row[0] for row in rows])
-    predicted = np.array([row[1] for row in rows])
+def score(rows: list[tuple], actual_index: int = 0, predicted_index: int = 1) -> float:
+    actual = np.array([row[actual_index] for row in rows])
+    predicted = np.array([row[predicted_index] for row in rows])
     return float(np.abs(actual - predicted).sum() / actual.sum())
 
 
@@ -61,7 +61,7 @@ def projections(frame: pd.DataFrame, origin: pd.Timestamp, method: str) -> dict:
     return result
 
 
-def evaluate(frame: pd.DataFrame, origin: pd.Timestamp, method: str) -> list[tuple[float, float]]:
+def evaluate(frame: pd.DataFrame, origin: pd.Timestamp, method: str) -> list[tuple]:
     actual = {(row.store_id, row.sku_id, row.channel, row.date): row
               for row in frame.itertuples() if pd.notna(row.quantity_sold)}
     rows = []
@@ -69,7 +69,9 @@ def evaluate(frame: pd.DataFrame, origin: pd.Timestamp, method: str) -> list[tup
         future = [actual.get((*key, origin + pd.Timedelta(days=offset))) for offset in range(1, 29)]
         if any(item is None for item in future):
             continue
-        rows.extend((float(item.quantity_sold * item.unit_price), float(quantity * price))
+        rows.extend((float(item.quantity_sold * item.unit_price), float(quantity * price),
+                     float(item.quantity_sold), float(quantity),
+                     float(quantity * item.unit_price), float(item.quantity_sold * price))
                     for item, quantity in zip(future, forecast))
     return rows
 
@@ -96,6 +98,10 @@ def main() -> None:
         holdout = evaluate(frame, holdout_origin, method)
         print(f"{method:22} validation_wape={score(validation):.4f} "
               f"holdout_wape={score(holdout):.4f} validation_rows={len(validation)} holdout_rows={len(holdout)}")
+        if method == "current_xgb":
+            print(f"  diagnostic: unit_wape={score(holdout, 2, 3):.4f} "
+                  f"revenue_wape_if_future_price_known={score(holdout, 0, 4):.4f} "
+                  f"revenue_wape_if_future_units_known={score(holdout, 0, 5):.4f}")
 
 
 if __name__ == "__main__":

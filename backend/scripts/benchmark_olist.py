@@ -87,7 +87,7 @@ def project(frame: pd.DataFrame, origin: pd.Timestamp, method: str) -> dict:
     return result
 
 
-def evaluate(frame: pd.DataFrame, origin: pd.Timestamp, method: str) -> list[tuple[float, float, float, float]]:
+def evaluate(frame: pd.DataFrame, origin: pd.Timestamp, method: str) -> list[tuple]:
     actual = {(row.store_id, row.sku_id, row.channel, row.date): row for row in frame.itertuples()}
     rows = []
     for key, (prediction, price) in project(frame, origin, method).items():
@@ -95,7 +95,8 @@ def evaluate(frame: pd.DataFrame, origin: pd.Timestamp, method: str) -> list[tup
             row = actual.get((*key, origin + pd.Timedelta(days=offset)))
             if row is not None:
                 rows.append((float(row.quantity_sold), float(quantity),
-                             float(row.quantity_sold * row.unit_price), float(quantity * price)))
+                             float(row.quantity_sold * row.unit_price), float(quantity * price),
+                             float(quantity * row.unit_price), float(row.quantity_sold * price)))
     return rows
 
 
@@ -120,6 +121,8 @@ def main() -> None:
             "holdout_unit_wape": wape(holdout, 0, 1),
             "validation_revenue_wape": wape(validation, 2, 3),
             "holdout_revenue_wape": wape(holdout, 2, 3),
+            "holdout_revenue_wape_with_actual_future_price_diagnostic": wape(holdout, 2, 4),
+            "holdout_revenue_wape_with_actual_future_units_diagnostic": wape(holdout, 2, 5),
             "validation_rows": len(validation), "holdout_rows": len(holdout),
         })
     print(json.dumps({"source": "Olist public e-commerce data", "grain": "daily category proxy",
