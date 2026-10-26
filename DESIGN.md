@@ -72,6 +72,8 @@ The brandmark is a transparent pixel-art black cat with gold eyes and a red bow 
 
 ## Do's and Don'ts
 
+The forecast workspace uses the HelloGrowthCRM reference for information hierarchy: horizon and segment controls, a dominant actual-versus-forecast chart, concise period totals, and a context rail. It retains the existing palette and Thai-first type. No confidence ribbon, sales target, deal card, or probability is shown without measured data. The rail exposes recency, eligible-series coverage, WAPE, and review status. On small screens it follows the chart.
+
 - Do show actual imported data and measured model quality.
 - Do preserve Thai-first wording and predictable control labels across screens.
 - Don't display placeholder business numbers as if they were real.

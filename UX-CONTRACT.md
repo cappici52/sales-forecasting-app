@@ -46,6 +46,8 @@ All data APIs require a session. Import and training require owner or manager on
 
 ## Navigation and display
 
+The forecast workspace uses 7/14/28-day buttons and existing store/SKU/category/channel filters. Its chart distinguishes actual revenue from projected revenue by both color and line style. The side rail shows latest imported date, selected forecast coverage, 28-day backtest WAPE, model review state, and a link to model evaluation. Period summaries show prior same-length observed revenue only when all selected days are present, projected revenue only when trained output exists, and eligible-series coverage. Missing values render as an em dash with an explanation. CRM deal values, probabilities, quotas, targets, and calibrated confidence intervals are not claimed because the data/API does not supply them.
+
 The selected section is visible in the sidebar on desktop and in the fixed bottom bar on mobile. Language and theme switches preserve preference in local storage when available. Status messages use `role=status` or `role=alert`. The forecast table is the text alternative to the chart.
 
 Section entrances and success emphasis are visual-only; they do not delay controls or announce false data changes. The pixel-art cat identifies the product on auth, navigation, and favicon surfaces. With `prefers-reduced-motion: reduce`, entrance, pop, and pulse animations are disabled.
