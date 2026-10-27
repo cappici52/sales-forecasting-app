@@ -139,7 +139,7 @@ uvicorn app.main:app --reload
 
 ## Dataset สำหรับเดโม
 
-แนะนำ [M5 Forecasting Accuracy](https://www.kaggle.com/competitions/m5-forecasting-accuracy/data): มีข้อมูลยอดขายรายวันระดับสินค้าและสาขา รวมถึงราคา ปฏิทิน event และ promotion เหมาะกับโจทย์พยากรณ์แบบ hierarchy. ข้อมูลชุดนี้ไม่มีช่องทางขายโดยตรง ดังนั้น `channel` จะเป็น optional ในระบบ
+ชุดสาธิตหลักสำหรับส่งโครงงานคือ [UCI Online Retail](https://archive.ics.uci.edu/dataset/352/online%2Bretail) ซึ่งมีธุรกรรมระดับสินค้าและราคา และ UCI ระบุสิทธิ์ CC BY 4.0 ไว้ชัดเจน ไฟล์ CSV ที่เตรียมไว้สำหรับนำเข้าอยู่ใน [ex_sales](ex_sales/README.md): นำเข้าไฟล์ `train` แล้วฝึกโมเดล ก่อนนำเข้าไฟล์ `full` เพื่อเทียบ snapshot กับยอดจริงช่วงกันไว้ ข้อมูลปี 2011 นี้เป็นข้อมูลสาธิต ไม่ใช่ยอดขายปัจจุบันของธุรกิจไทย ผลและข้อจำกัดรอบสุดท้ายอยู่ใน [รายงานตรวจรับ](reports/final-project-verification-2026-10-27.md). [M5 Forecasting Accuracy](https://www.kaggle.com/competitions/m5-forecasting-accuracy/data) ยังใช้เป็นชุดทดสอบโมเดลแยก เพราะมีข้อมูลรายวันระดับสินค้าและสาขา แต่ไฟล์ดิบอยู่ภายใต้กติกาการแข่งขันและไม่รวมใน repository
 
 ### ทดสอบครบวงจรด้วยข้อมูลธุรกรรมจริง
 
